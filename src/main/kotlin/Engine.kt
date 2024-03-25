@@ -9,11 +9,8 @@ import org.lwjgl.system.Configuration.DEBUG
 import org.lwjgl.vulkan.*
 import org.lwjgl.vulkan.EXTDebugUtils.*
 
-class Engine(
+abstract class Engine(
     private val size: Vec2<Int>,
-    private val initFun: (window: Long) -> Unit,
-    private val loopFun: (window: Long) -> Unit,
-    private val cleanupFun: () -> Unit,
     private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
 ) {
 
@@ -21,19 +18,22 @@ class Engine(
     private var vulkan: VkInstance? = null
     private val validationLayers = if (DEBUG.get(true)) listOf("VK_LAYER_KHRONOS_validation") else emptyList()
     private var debugMessenger: Long? = null
+    private var physicalDevice: VkPhysicalDevice? = null
 
     fun run() {
         try {
             initWindow()
             initVulkan()
-            initFun(window!!)
-            loop()
+            init(window!!)
+            pLoop()
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
-            cleanup()
+            pCleanup()
         }
     }
+
+    abstract fun init(window: Long)
 
     private fun initWindow() {
 
@@ -67,6 +67,7 @@ class Engine(
     private fun initVulkan() {
         createInstance()
         setupDebugMessenger()
+        pickPhysicalDevice()
     }
 
     private fun createInstance() {
@@ -154,7 +155,7 @@ class Engine(
         return createInfo
     }
 
-    private fun debugCallback(messageSeverity: Int, messageType: Int, pCallbackData: Long, pUserData: Long): Int {
+    open fun debugCallback(messageSeverity: Int, messageType: Int, pCallbackData: Long, pUserData: Long): Int {
         if (messageSeverity >= logLevel) {
             val callbackData = VkDebugUtilsMessengerCallbackDataEXT.create(pCallbackData)
             val color = when (messageSeverity) {
@@ -179,9 +180,48 @@ class Engine(
         return VK_FALSE
     }
 
-    private fun loop() {
+    private fun pickPhysicalDevice() {
+        MemoryStack.stackPush().use { stack ->
+            val deviceCount = stack.ints(0)
+            vkEnumeratePhysicalDevices(vulkan!!, deviceCount, null)
+            if (deviceCount[0] == 0) {
+                throw RuntimeException("Failed to find GPUs with Vulkan support")
+            }
+            val ppPhysicalDevices = stack.mallocPointer(deviceCount[0])
+            vkEnumeratePhysicalDevices(vulkan!!, deviceCount, ppPhysicalDevices)
+            val devices = mutableMapOf<VkPhysicalDevice, Byte>()
+            for (i in 0..<ppPhysicalDevices.capacity()) {
+                val device = VkPhysicalDevice(ppPhysicalDevices[i], vulkan!!)
+                val properties = VkPhysicalDeviceProperties.calloc(stack)
+                vkGetPhysicalDeviceProperties(device, properties)
+                val features = VkPhysicalDeviceFeatures.calloc(stack)
+                vkGetPhysicalDeviceFeatures(device, features)
+                val queueFamilies = findQueueFamilies(device)
+                devices[device] = rateDeviceSuitability(device, properties, features, queueFamilies)
+            }
+            if (devices.none { it.value >= 1 })
+                throw RuntimeException("Failed to find a suitable GPU")
+            physicalDevice = devices.maxBy { it.value }.key
+        }
+    }
+
+    open fun rateDeviceSuitability(device: VkPhysicalDevice, properties: VkPhysicalDeviceProperties, features: VkPhysicalDeviceFeatures, queueFamilies: Int?): Byte {
+        return if (queueFamilies != null) 1 else 0
+    }
+
+    private fun findQueueFamilies(device: VkPhysicalDevice): Int? {
+        MemoryStack.stackPush().use { stack ->
+            val queueFamilyCount = stack.ints(0)
+            vkGetPhysicalDeviceQueueFamilyProperties(device, queueFamilyCount, null)
+            val queueFamilies = VkQueueFamilyProperties.malloc(queueFamilyCount[0], stack)
+            vkGetPhysicalDeviceQueueFamilyProperties(device, queueFamilyCount, queueFamilies)
+            return (0..queueFamilies.capacity()).firstOrNull { (queueFamilies.get(it).queueFlags() and VK_QUEUE_GRAPHICS_BIT) != 0 }
+        }
+    }
+
+    private fun pLoop() {
         while (!glfwWindowShouldClose(window!!)) {
-            loopFun(window!!)
+            loop(window!!)
 
             glfwSwapBuffers(window!!)
 
@@ -189,16 +229,20 @@ class Engine(
         }
     }
 
-    private fun cleanup() {
+    abstract fun loop(window: Long)
+
+    private fun pCleanup() {
         try {
             if (DEBUG.get(true)) {
                 vkDestroyDebugUtilsMessengerEXT(vulkan!!, debugMessenger!!, null)
             }
-            cleanupFun()
+            cleanup()
             vkDestroyInstance(vulkan!!, null)
             glfwDestroyWindow(window!!)
         } finally {
             glfwTerminate()
         }
     }
+
+    abstract fun cleanup()
 }
