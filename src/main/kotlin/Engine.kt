@@ -9,14 +9,17 @@ import org.lwjgl.vulkan.VK10.*
 import org.lwjgl.system.Configuration.DEBUG
 import org.lwjgl.vulkan.*
 import org.lwjgl.vulkan.EXTDebugUtils.*
-import org.lwjgl.vulkan.KHRSurface.vkDestroySurfaceKHR
-import org.lwjgl.vulkan.KHRSurface.vkGetPhysicalDeviceSurfaceSupportKHR
+import org.lwjgl.vulkan.KHRSurface.*
+import org.lwjgl.vulkan.KHRSwapchain.VK_KHR_SWAPCHAIN_EXTENSION_NAME
+import utils.toList
+import utils.toPointerBuffer
 
 abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 
     private var window: Long? = null
     private var vulkan: VkInstance? = null
     private val validationLayers = if (DEBUG.get(true)) listOf("VK_LAYER_KHRONOS_validation") else emptyList()
+    private val deviceExtensions = listOf(VK_KHR_SWAPCHAIN_EXTENSION_NAME)
     private var debugMessenger: Long? = null
     private var physicalDevice: VkPhysicalDevice? = null
     private var logicalDevice: VkDevice? = null
@@ -94,11 +97,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
 
             createInfo.sType(VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO)
             createInfo.pApplicationInfo(appInfo)
-            val layers = stack.mallocPointer(validationLayers.size)
-            validationLayers.forEachIndexed { index, layer ->
-                layers.put(index, stack.UTF8(layer))
-            }
-            createInfo.ppEnabledLayerNames(layers)
+            createInfo.ppEnabledLayerNames(validationLayers.toPointerBuffer(stack))
             createInfo.ppEnabledExtensionNames(getRequiredExtensions(stack))
 
             if (DEBUG.get(true)) {
@@ -211,7 +210,21 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
     }
 
     open fun rateDeviceSuitability(device: VkPhysicalDevice, properties: VkPhysicalDeviceProperties, features: VkPhysicalDeviceFeatures, queueFamilies: QueueFamilyIndices): Byte {
-        return if (queueFamilies.isComplete) 1 else 0
+        MemoryStack.stackPush().use { stack ->
+            val extensionCount = stack.ints(0)
+            vkEnumerateDeviceExtensionProperties(device, null as String?, extensionCount, null)
+            val availableExtensions = VkExtensionProperties.malloc(extensionCount[0], stack)
+            vkEnumerateDeviceExtensionProperties(device, null as String?, extensionCount, availableExtensions)
+            val availableExtensionsNames = availableExtensions.map { it.extensionNameString() }
+            if (
+                !queueFamilies.isComplete ||
+                !deviceExtensions.all { it in availableExtensionsNames } ||
+                querySwapChainSupport(device).let { it.formats.isEmpty() || it.presentModes.isEmpty() }
+            ) {
+                return 0
+            }
+            return 1
+        }
     }
 
     private fun findQueueFamilies(device: VkPhysicalDevice): QueueFamilyIndices {
@@ -259,12 +272,8 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
             createInfo.sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO)
             createInfo.pQueueCreateInfos(queuesCreateInfos)
             createInfo.pEnabledFeatures(deviceFeatures)
-            createInfo.ppEnabledExtensionNames(null)
-            val layers = stack.mallocPointer(validationLayers.size)
-            validationLayers.forEachIndexed { index, layer ->
-                layers.put(index, stack.UTF8(layer))
-            }
-            createInfo.ppEnabledLayerNames(layers)
+            createInfo.ppEnabledExtensionNames(deviceExtensions.toPointerBuffer(stack))
+            createInfo.ppEnabledLayerNames(validationLayers.toPointerBuffer(stack))
             val createInfoPtr = stack.mallocPointer(1)
             if (vkCreateDevice(physicalDevice!!, createInfo, null, createInfoPtr) != VK_SUCCESS) {
                 throw RuntimeException("Failed to create logical device")
@@ -282,6 +291,32 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
                 throw RuntimeException("Failed to create window surface")
             }
             surface = pSurface.get(0)
+        }
+    }
+
+    private fun querySwapChainSupport(device: VkPhysicalDevice): SwapChainSupportDetails {
+        MemoryStack.stackPush().use { stack ->
+            val details = SwapChainSupportDetails(
+                VkSurfaceCapabilitiesKHR.malloc(stack),
+                mutableListOf(),
+                mutableListOf()
+            )
+            vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface!!, details.capabilities)
+            val formatCount = stack.ints(0)
+            vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface!!, formatCount, null)
+            if (formatCount[0] != 0) {
+                val formats = VkSurfaceFormatKHR.malloc(formatCount[0], stack)
+                vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface!!, formatCount, formats)
+                details.formats.addAll(formats)
+            }
+            val presentModeCount = stack.ints(0)
+            vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface!!, presentModeCount, null)
+            if (presentModeCount[0] != 0) {
+                val presentModes = stack.ints(presentModeCount[0])
+                vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface!!, presentModeCount, presentModes)
+                details.presentModes.addAll(presentModes.toList())
+            }
+            return details
         }
     }
 
@@ -320,4 +355,10 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
     class QueueFamilyIndices(var graphicsFamily: Int? = null, var presentFamily: Int? = null) {
         val isComplete get() = graphicsFamily != null && presentFamily != null
     }
+
+    class SwapChainSupportDetails(
+        val capabilities: VkSurfaceCapabilitiesKHR,
+        val formats: MutableList<VkSurfaceFormatKHR>,
+        val presentModes: MutableList<Int>
+    )
 }
