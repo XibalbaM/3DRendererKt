@@ -9,16 +9,15 @@ import org.lwjgl.system.Configuration.DEBUG
 import org.lwjgl.vulkan.*
 import org.lwjgl.vulkan.EXTDebugUtils.*
 
-abstract class Engine(
-    private val size: Vec2<Int>,
-    private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
-) {
+abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 
     private var window: Long? = null
     private var vulkan: VkInstance? = null
     private val validationLayers = if (DEBUG.get(true)) listOf("VK_LAYER_KHRONOS_validation") else emptyList()
     private var debugMessenger: Long? = null
     private var physicalDevice: VkPhysicalDevice? = null
+    private var logicalDevice: VkDevice? = null
+    private var graphicsQueue: VkQueue? = null
 
     fun run() {
         try {
@@ -68,6 +67,7 @@ abstract class Engine(
         createInstance()
         setupDebugMessenger()
         pickPhysicalDevice()
+        createLogicalDevice()
     }
 
     private fun createInstance() {
@@ -219,6 +219,39 @@ abstract class Engine(
         }
     }
 
+    private fun createLogicalDevice() {
+        if (physicalDevice == null) {
+            throw RuntimeException("No physical device found")
+        }
+        MemoryStack.stackPush().use { stack ->
+            val queueCreateInfo = VkDeviceQueueCreateInfo.calloc(1, stack)
+            queueCreateInfo.sType(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO)
+            queueCreateInfo.queueFamilyIndex(findQueueFamilies(physicalDevice!!)!!)
+            queueCreateInfo.pQueuePriorities(stack.floats(1.0f))
+
+            val deviceFeatures = VkPhysicalDeviceFeatures.calloc(stack)
+
+            val createInfo = VkDeviceCreateInfo.calloc(stack)
+            createInfo.sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO)
+            createInfo.pQueueCreateInfos(queueCreateInfo)
+            createInfo.pEnabledFeatures(deviceFeatures)
+            createInfo.ppEnabledExtensionNames(null)
+            val layers = stack.mallocPointer(validationLayers.size)
+            validationLayers.forEachIndexed { index, layer ->
+                layers.put(index, stack.UTF8(layer))
+            }
+            createInfo.ppEnabledLayerNames(layers)
+            val createInfoPtr = stack.mallocPointer(1)
+            if (vkCreateDevice(physicalDevice!!, createInfo, null, createInfoPtr) != VK_SUCCESS) {
+                throw RuntimeException("Failed to create logical device")
+            }
+            logicalDevice = VkDevice(createInfoPtr.get(0), physicalDevice!!, createInfo)
+            val queue = stack.mallocPointer(1)
+            vkGetDeviceQueue(logicalDevice!!, findQueueFamilies(physicalDevice!!)!!, 0, queue)
+            graphicsQueue = VkQueue(queue.get(0), logicalDevice!!)
+        }
+    }
+
     private fun pLoop() {
         while (!glfwWindowShouldClose(window!!)) {
             loop(window!!)
@@ -237,6 +270,7 @@ abstract class Engine(
                 vkDestroyDebugUtilsMessengerEXT(vulkan!!, debugMessenger!!, null)
             }
             cleanup()
+            vkDestroyDevice(logicalDevice!!, null)
             vkDestroyInstance(vulkan!!, null)
             glfwDestroyWindow(window!!)
         } finally {
