@@ -1,6 +1,7 @@
 import fr.xibalba.math.Vec2
 import org.lwjgl.PointerBuffer
 import org.lwjgl.glfw.GLFW.*
+import org.lwjgl.glfw.GLFWVulkan.glfwCreateWindowSurface
 import org.lwjgl.glfw.GLFWVulkan.glfwGetRequiredInstanceExtensions
 import org.lwjgl.system.MemoryStack
 import org.lwjgl.system.MemoryUtil.NULL
@@ -8,6 +9,8 @@ import org.lwjgl.vulkan.VK10.*
 import org.lwjgl.system.Configuration.DEBUG
 import org.lwjgl.vulkan.*
 import org.lwjgl.vulkan.EXTDebugUtils.*
+import org.lwjgl.vulkan.KHRSurface.vkDestroySurfaceKHR
+import org.lwjgl.vulkan.KHRSurface.vkGetPhysicalDeviceSurfaceSupportKHR
 
 abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 
@@ -17,7 +20,9 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
     private var debugMessenger: Long? = null
     private var physicalDevice: VkPhysicalDevice? = null
     private var logicalDevice: VkDevice? = null
+    private var surface: Long? = null
     private var graphicsQueue: VkQueue? = null
+    private var presentQueue: VkQueue? = null
 
     fun run() {
         try {
@@ -66,6 +71,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
     private fun initVulkan() {
         createInstance()
         setupDebugMessenger()
+        createSurface()
         pickPhysicalDevice()
         createLogicalDevice()
     }
@@ -88,7 +94,6 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
 
             createInfo.sType(VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO)
             createInfo.pApplicationInfo(appInfo)
-            createInfo.ppEnabledExtensionNames(glfwGetRequiredInstanceExtensions())
             val layers = stack.mallocPointer(validationLayers.size)
             validationLayers.forEachIndexed { index, layer ->
                 layers.put(index, stack.UTF8(layer))
@@ -205,17 +210,29 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
         }
     }
 
-    open fun rateDeviceSuitability(device: VkPhysicalDevice, properties: VkPhysicalDeviceProperties, features: VkPhysicalDeviceFeatures, queueFamilies: Int?): Byte {
-        return if (queueFamilies != null) 1 else 0
+    open fun rateDeviceSuitability(device: VkPhysicalDevice, properties: VkPhysicalDeviceProperties, features: VkPhysicalDeviceFeatures, queueFamilies: QueueFamilyIndices): Byte {
+        return if (queueFamilies.isComplete) 1 else 0
     }
 
-    private fun findQueueFamilies(device: VkPhysicalDevice): Int? {
+    private fun findQueueFamilies(device: VkPhysicalDevice): QueueFamilyIndices {
+        val indices = QueueFamilyIndices()
         MemoryStack.stackPush().use { stack ->
             val queueFamilyCount = stack.ints(0)
             vkGetPhysicalDeviceQueueFamilyProperties(device, queueFamilyCount, null)
             val queueFamilies = VkQueueFamilyProperties.malloc(queueFamilyCount[0], stack)
             vkGetPhysicalDeviceQueueFamilyProperties(device, queueFamilyCount, queueFamilies)
-            return (0..queueFamilies.capacity()).firstOrNull { (queueFamilies.get(it).queueFlags() and VK_QUEUE_GRAPHICS_BIT) != 0 }
+            val presentSupport = stack.mallocInt(1)
+            for (i in 0..<queueFamilies.capacity()) {
+                if (queueFamilies[i].queueFlags() and VK_QUEUE_GRAPHICS_BIT != 0) {
+                    indices.graphicsFamily = i
+                }
+                vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface!!, presentSupport)
+                if (presentSupport.get(0) == VK_TRUE) {
+                    indices.presentFamily = i
+                }
+                if (indices.isComplete) break
+            }
+            return indices
         }
     }
 
@@ -223,17 +240,24 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
         if (physicalDevice == null) {
             throw RuntimeException("No physical device found")
         }
+        val indices = findQueueFamilies(physicalDevice!!)
         MemoryStack.stackPush().use { stack ->
-            val queueCreateInfo = VkDeviceQueueCreateInfo.calloc(1, stack)
-            queueCreateInfo.sType(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO)
-            queueCreateInfo.queueFamilyIndex(findQueueFamilies(physicalDevice!!)!!)
-            queueCreateInfo.pQueuePriorities(stack.floats(1.0f))
+            val uniqueQueueFamilies = setOf(indices.graphicsFamily!!, indices.presentFamily!!)
+            val queuePriority = stack.floats(1.0f)
+            val queuesCreateInfos = VkDeviceQueueCreateInfo.calloc(uniqueQueueFamilies.size, stack)
+            uniqueQueueFamilies.forEachIndexed { index, family ->
+                val queueCreateInfo = VkDeviceQueueCreateInfo.calloc(stack)
+                queueCreateInfo.sType(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO)
+                queueCreateInfo.queueFamilyIndex(family)
+                queueCreateInfo.pQueuePriorities(queuePriority)
+                queuesCreateInfos.put(index, queueCreateInfo)
+            }
 
             val deviceFeatures = VkPhysicalDeviceFeatures.calloc(stack)
 
             val createInfo = VkDeviceCreateInfo.calloc(stack)
             createInfo.sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO)
-            createInfo.pQueueCreateInfos(queueCreateInfo)
+            createInfo.pQueueCreateInfos(queuesCreateInfos)
             createInfo.pEnabledFeatures(deviceFeatures)
             createInfo.ppEnabledExtensionNames(null)
             val layers = stack.mallocPointer(validationLayers.size)
@@ -246,9 +270,18 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
                 throw RuntimeException("Failed to create logical device")
             }
             logicalDevice = VkDevice(createInfoPtr.get(0), physicalDevice!!, createInfo)
-            val queue = stack.mallocPointer(1)
-            vkGetDeviceQueue(logicalDevice!!, findQueueFamilies(physicalDevice!!)!!, 0, queue)
-            graphicsQueue = VkQueue(queue.get(0), logicalDevice!!)
+            graphicsQueue = VkQueue(stack.mallocPointer(1).apply { vkGetDeviceQueue(logicalDevice!!, indices.graphicsFamily!!, 0, this) }.get(0), logicalDevice!!)
+            presentQueue = VkQueue(stack.mallocPointer(1).apply { vkGetDeviceQueue(logicalDevice!!, indices.presentFamily!!, 0, this) }.get(0), logicalDevice!!)
+        }
+    }
+
+    private fun createSurface() {
+        MemoryStack.stackPush().use { stack ->
+            val pSurface = stack.mallocLong(1)
+            if (glfwCreateWindowSurface(vulkan!!, window!!, null, pSurface) != VK_SUCCESS) {
+                throw RuntimeException("Failed to create window surface")
+            }
+            surface = pSurface.get(0)
         }
     }
 
@@ -269,8 +302,12 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
             if (DEBUG.get(true)) {
                 vkDestroyDebugUtilsMessengerEXT(vulkan!!, debugMessenger!!, null)
             }
+
             cleanup()
+
             vkDestroyDevice(logicalDevice!!, null)
+            vkDestroySurfaceKHR(vulkan!!, surface!!, null)
+
             vkDestroyInstance(vulkan!!, null)
             glfwDestroyWindow(window!!)
         } finally {
@@ -279,4 +316,8 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
     }
 
     abstract fun cleanup()
+
+    class QueueFamilyIndices(var graphicsFamily: Int? = null, var presentFamily: Int? = null) {
+        val isComplete get() = graphicsFamily != null && presentFamily != null
+    }
 }
