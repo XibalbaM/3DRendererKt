@@ -10,7 +10,7 @@ import org.lwjgl.system.Configuration.DEBUG
 import org.lwjgl.vulkan.*
 import org.lwjgl.vulkan.EXTDebugUtils.*
 import org.lwjgl.vulkan.KHRSurface.*
-import org.lwjgl.vulkan.KHRSwapchain.VK_KHR_SWAPCHAIN_EXTENSION_NAME
+import org.lwjgl.vulkan.KHRSwapchain.*
 import utils.toList
 import utils.toPointerBuffer
 
@@ -26,6 +26,10 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
     private var surface: Long? = null
     private var graphicsQueue: VkQueue? = null
     private var presentQueue: VkQueue? = null
+    private var swapChain: Long? = null
+    private var swapChainImages: List<Long>? = null
+    private var swapChainImageFormat: Int? = null
+    private var swapChainExtent: VkExtent2D? = null
 
     fun run() {
         try {
@@ -77,6 +81,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
         createSurface()
         pickPhysicalDevice()
         createLogicalDevice()
+        createSwapChain()
     }
 
     private fun createInstance() {
@@ -219,7 +224,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
             if (
                 !queueFamilies.isComplete ||
                 !deviceExtensions.all { it in availableExtensionsNames } ||
-                querySwapChainSupport(device).let { it.formats.isEmpty() || it.presentModes.isEmpty() }
+                querySwapChainSupport(stack, device).let { it.formats.isEmpty() || it.presentModes.isEmpty() }
             ) {
                 return 0
             }
@@ -294,29 +299,98 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
         }
     }
 
-    private fun querySwapChainSupport(device: VkPhysicalDevice): SwapChainSupportDetails {
+    private fun querySwapChainSupport(stack: MemoryStack, device: VkPhysicalDevice): SwapChainSupportDetails {
+        val details = SwapChainSupportDetails(
+            VkSurfaceCapabilitiesKHR.malloc(stack),
+            mutableListOf(),
+            mutableListOf()
+        )
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface!!, details.capabilities)
+        val formatCount = stack.ints(0)
+        vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface!!, formatCount, null)
+        if (formatCount[0] != 0) {
+            val formats = VkSurfaceFormatKHR.malloc(formatCount[0], stack)
+            vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface!!, formatCount, formats)
+            details.formats.addAll(formats)
+        }
+        val presentModeCount = stack.ints(0)
+        vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface!!, presentModeCount, null)
+        if (presentModeCount[0] != 0) {
+            val presentModes = stack.mallocInt(presentModeCount[0])
+            vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface!!, presentModeCount, presentModes)
+            details.presentModes.addAll(presentModes.toList())
+        }
+        return details
+    }
+
+    private fun createSwapChain() {
         MemoryStack.stackPush().use { stack ->
-            val details = SwapChainSupportDetails(
-                VkSurfaceCapabilitiesKHR.malloc(stack),
-                mutableListOf(),
-                mutableListOf()
-            )
-            vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface!!, details.capabilities)
-            val formatCount = stack.ints(0)
-            vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface!!, formatCount, null)
-            if (formatCount[0] != 0) {
-                val formats = VkSurfaceFormatKHR.malloc(formatCount[0], stack)
-                vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface!!, formatCount, formats)
-                details.formats.addAll(formats)
+            val swapChainSupport = querySwapChainSupport(stack, physicalDevice!!)
+            val surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats)
+            val presentMode = chooseSwapPresentMode(swapChainSupport.presentModes)
+            val extent = chooseSwapExtent(stack, swapChainSupport.capabilities)
+            var imageCount = swapChainSupport.capabilities.minImageCount() + 1
+            if (swapChainSupport.capabilities.maxImageCount() in 1..imageCount) {
+                imageCount = swapChainSupport.capabilities.maxImageCount()
             }
-            val presentModeCount = stack.ints(0)
-            vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface!!, presentModeCount, null)
-            if (presentModeCount[0] != 0) {
-                val presentModes = stack.mallocInt(presentModeCount[0])
-                vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface!!, presentModeCount, presentModes)
-                details.presentModes.addAll(presentModes.toList())
+            val indices = findQueueFamilies(physicalDevice!!)
+
+            val createInfo = VkSwapchainCreateInfoKHR.calloc(stack)
+            createInfo.sType(VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR)
+            createInfo.surface(surface!!)
+            createInfo.minImageCount(imageCount)
+            createInfo.imageFormat(surfaceFormat.format())
+            createInfo.imageColorSpace(surfaceFormat.colorSpace())
+            createInfo.imageExtent(extent)
+            createInfo.imageArrayLayers(1)
+            createInfo.imageUsage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+            if (indices.graphicsFamily != indices.presentFamily) {
+                createInfo.imageSharingMode(VK_SHARING_MODE_CONCURRENT)
+                createInfo.pQueueFamilyIndices(stack.ints(indices.graphicsFamily!!, indices.presentFamily!!))
+            } else {
+                createInfo.imageSharingMode(VK_SHARING_MODE_EXCLUSIVE)
             }
-            return details
+            createInfo.preTransform(swapChainSupport.capabilities.currentTransform())
+            createInfo.compositeAlpha(VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
+            createInfo.presentMode(presentMode)
+            createInfo.clipped(true)
+            createInfo.oldSwapchain(VK_NULL_HANDLE)
+            val pSwapChain = stack.mallocLong(1)
+            if (vkCreateSwapchainKHR(logicalDevice!!, createInfo, null, pSwapChain) != VK_SUCCESS) {
+                throw RuntimeException("Failed to create swap chain")
+            }
+            swapChain = pSwapChain.get(0)
+
+            val pImageCount = stack.ints(0)
+            vkGetSwapchainImagesKHR(logicalDevice!!, swapChain!!, pImageCount, null)
+            val pSwapChainImages = stack.mallocLong(pImageCount[0])
+            vkGetSwapchainImagesKHR(logicalDevice!!, swapChain!!, pImageCount, pSwapChainImages)
+            swapChainImages = pSwapChainImages.toList()
+
+            swapChainImageFormat = surfaceFormat.format()
+            swapChainExtent = extent
+        }
+    }
+
+    private fun chooseSwapSurfaceFormat(formats: List<VkSurfaceFormatKHR>): VkSurfaceFormatKHR {
+        return formats.firstOrNull { it.format() == VK_FORMAT_B8G8R8A8_SRGB && it.colorSpace() == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR }
+            ?: formats.first()
+    }
+
+    private fun chooseSwapPresentMode(presentModes: List<Int>): Int {
+        return presentModes.firstOrNull { it == VK_PRESENT_MODE_MAILBOX_KHR } ?: VK_PRESENT_MODE_FIFO_KHR
+    }
+
+    private fun chooseSwapExtent(stack: MemoryStack, capabilities: VkSurfaceCapabilitiesKHR): VkExtent2D {
+        return capabilities.currentExtent().let {
+            if (it.width() != Int.MAX_VALUE) it
+            else {
+                val actualExtent = VkExtent2D.calloc(stack).set(size.x, size.y)
+                actualExtent.apply {
+                    width(width().coerceAtMost(capabilities.maxImageExtent().width()).coerceAtLeast(capabilities.minImageExtent().width()))
+                    height(height().coerceAtMost(capabilities.maxImageExtent().height()).coerceAtLeast(capabilities.minImageExtent().height()))
+                }
+            }
         }
     }
 
@@ -334,12 +408,14 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
 
     private fun pCleanup() {
         try {
+
+            cleanup()
+
             if (DEBUG.get(true)) {
                 vkDestroyDebugUtilsMessengerEXT(vulkan!!, debugMessenger!!, null)
             }
 
-            cleanup()
-
+            vkDestroySwapchainKHR(logicalDevice!!, swapChain!!, null)
             vkDestroyDevice(logicalDevice!!, null)
             vkDestroySurfaceKHR(vulkan!!, surface!!, null)
 
