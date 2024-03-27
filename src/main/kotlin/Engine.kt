@@ -13,6 +13,7 @@ import org.lwjgl.vulkan.KHRSurface.*
 import org.lwjgl.vulkan.KHRSwapchain.*
 import utils.toList
 import utils.toPointerBuffer
+import java.lang.invoke.MethodHandles.loop
 
 abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 
@@ -28,6 +29,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
     private var presentQueue: VkQueue? = null
     private var swapChain: Long? = null
     private var swapChainImages: List<Long>? = null
+    private var swapChainImageViews: List<Long>? = null
     private var swapChainImageFormat: Int? = null
     private var swapChainExtent: VkExtent2D? = null
 
@@ -82,6 +84,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
         pickPhysicalDevice()
         createLogicalDevice()
         createSwapChain()
+        createImageViews()
     }
 
     private fun createInstance() {
@@ -394,6 +397,36 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
         }
     }
 
+    private fun createImageViews() {
+        MemoryStack.stackPush().use { stack ->
+            swapChainImageViews = swapChainImages!!.map { image ->
+                val createInfo = VkImageViewCreateInfo.calloc(stack)
+                createInfo.sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
+                createInfo.image(image)
+                createInfo.viewType(VK_IMAGE_VIEW_TYPE_2D)
+                createInfo.format(swapChainImageFormat!!)
+                createInfo.components {
+                    it.r(VK_COMPONENT_SWIZZLE_IDENTITY)
+                    it.g(VK_COMPONENT_SWIZZLE_IDENTITY)
+                    it.b(VK_COMPONENT_SWIZZLE_IDENTITY)
+                    it.a(VK_COMPONENT_SWIZZLE_IDENTITY)
+                }
+                createInfo.subresourceRange {
+                    it.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                    it.baseMipLevel(0)
+                    it.levelCount(1)
+                    it.baseArrayLayer(0)
+                    it.layerCount(1)
+                }
+                val pImageView = stack.mallocLong(1)
+                if (vkCreateImageView(logicalDevice!!, createInfo, null, pImageView) != VK_SUCCESS) {
+                    throw RuntimeException("Failed to create image views")
+                }
+                pImageView.get(0)
+            }
+        }
+    }
+
     private fun pLoop() {
         while (!glfwWindowShouldClose(window!!)) {
             loop(window!!)
@@ -415,6 +448,9 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
                 vkDestroyDebugUtilsMessengerEXT(vulkan!!, debugMessenger!!, null)
             }
 
+            swapChainImageViews!!.forEach {
+                vkDestroyImageView(logicalDevice!!, it, null)
+            }
             vkDestroySwapchainKHR(logicalDevice!!, swapChain!!, null)
             vkDestroyDevice(logicalDevice!!, null)
             vkDestroySurfaceKHR(vulkan!!, surface!!, null)
