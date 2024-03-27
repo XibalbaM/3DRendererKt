@@ -312,7 +312,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
             val presentModeCount = stack.ints(0)
             vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface!!, presentModeCount, null)
             if (presentModeCount[0] != 0) {
-                val presentModes = stack.ints(presentModeCount[0])
+                val presentModes = stack.mallocInt(presentModeCount[0])
                 vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface!!, presentModeCount, presentModes)
                 details.presentModes.addAll(presentModes.toList())
             }
