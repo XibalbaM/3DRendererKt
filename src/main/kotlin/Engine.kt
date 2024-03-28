@@ -43,7 +43,6 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         try {
             initWindow()
             initVulkan()
-            init(window!!)
             pLoop()
         } catch (e: Exception) {
             e.printStackTrace()
@@ -51,8 +50,6 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
             pCleanup()
         }
     }
-
-    abstract fun init(window: Long)
 
     private fun initWindow() {
 
@@ -682,7 +679,6 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
 
     private fun pLoop() {
         while (!glfwWindowShouldClose(window!!)) {
-            loop(window!!)
 
             glfwSwapBuffers(window!!)
 
@@ -690,12 +686,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         }
     }
 
-    abstract fun loop(window: Long)
-
     private fun pCleanup() {
         try {
-
-            cleanup()
 
             if (DEBUG.get(true)) {
                 vkDestroyDebugUtilsMessengerEXT(vulkan!!, debugMessenger!!, null)
@@ -721,8 +713,6 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
             glfwTerminate()
         }
     }
-
-    abstract fun cleanup()
 
     class QueueFamilyIndices(var graphicsFamily: Int? = null, var presentFamily: Int? = null) {
         val isComplete get() = graphicsFamily != null && presentFamily != null
