@@ -28,3 +28,29 @@ tasks.test {
 kotlin {
     jvmToolchain(21)
 }
+
+tasks.register("compileVertShader") {
+    group = "build"
+    description = "Compile vert shader"
+    exec {
+        commandLine("glslc", "./src/main/resources/shaders/shader.vert", "-o", "./src/main/resources/shaders/vert.spv")
+    }
+}
+
+tasks.register("compileFragShader") {
+    group = "build"
+    description = "Compile frag shader"
+    exec {
+        commandLine("glslc", "./src/main/resources/shaders/shader.frag", "-o", "./src/main/resources/shaders/frag.spv")
+    }
+}
+
+tasks.register("compileShaders") {
+    group = "build"
+    description = "Compile shaders"
+    dependsOn("compileVertShader", "compileFragShader")
+}
+
+tasks.processResources {
+    dependsOn("compileShaders")
+}
