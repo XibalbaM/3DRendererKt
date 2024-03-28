@@ -11,6 +11,7 @@ import org.lwjgl.vulkan.*
 import org.lwjgl.vulkan.EXTDebugUtils.*
 import org.lwjgl.vulkan.KHRSurface.*
 import org.lwjgl.vulkan.KHRSwapchain.*
+import utils.loadShader
 import utils.toList
 import utils.toPointerBuffer
 
@@ -31,6 +32,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
     private var swapChainImageViews: List<Long>? = null
     private var swapChainImageFormat: Int? = null
     private var swapChainExtent: VkExtent2D? = null
+    private var pipelineLayout: Long? = null
 
     fun run() {
         try {
@@ -84,6 +86,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
         createLogicalDevice()
         createSwapChain()
         createImageViews()
+        createGraphicsPipeline()
     }
 
     private fun createInstance() {
@@ -426,6 +429,103 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
         }
     }
 
+    private fun createGraphicsPipeline() {
+        MemoryStack.stackPush().use { stack ->
+            val vertShaderModule = createShaderModule(stack, loadShader("vert.spv"))
+            val fragShaderModule = createShaderModule(stack, loadShader("frag.spv"))
+
+            val vertShaderStageInfo = VkPipelineShaderStageCreateInfo.calloc(stack)
+            vertShaderStageInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO)
+            vertShaderStageInfo.stage(VK_SHADER_STAGE_VERTEX_BIT)
+            vertShaderStageInfo.module(vertShaderModule)
+            vertShaderStageInfo.pName(stack.UTF8("main"))
+
+            val fragShaderStageInfo = VkPipelineShaderStageCreateInfo.calloc(stack)
+            fragShaderStageInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO)
+            fragShaderStageInfo.stage(VK_SHADER_STAGE_FRAGMENT_BIT)
+            fragShaderStageInfo.module(fragShaderModule)
+            fragShaderStageInfo.pName(stack.UTF8("main"))
+
+            val shaderStages = VkPipelineShaderStageCreateInfo.calloc(2, stack)
+            shaderStages.put(vertShaderStageInfo).put(fragShaderStageInfo).flip()
+
+            val vertexInputInfo = VkPipelineVertexInputStateCreateInfo.calloc(stack)
+            vertexInputInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO)
+            vertexInputInfo.pVertexBindingDescriptions(null)
+            vertexInputInfo.pVertexAttributeDescriptions(null)
+
+            val inputAssembly = VkPipelineInputAssemblyStateCreateInfo.calloc(stack)
+            inputAssembly.sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO)
+            inputAssembly.topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+            inputAssembly.primitiveRestartEnable(false)
+
+            val viewport = VkViewport.calloc(stack)
+            viewport.x(0.0f)
+            viewport.y(0.0f)
+            viewport.width(swapChainExtent!!.width().toFloat())
+            viewport.height(swapChainExtent!!.height().toFloat())
+            viewport.minDepth(0.0f)
+            viewport.maxDepth(1.0f)
+
+            val scissor = VkRect2D.calloc(stack)
+            scissor.offset { it.x(0).y(0) }
+            scissor.extent(swapChainExtent!!)
+
+            val viewportState = VkPipelineViewportStateCreateInfo.calloc(stack)
+            viewportState.sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO)
+            viewportState.pViewports(VkViewport.calloc(1, stack).put(viewport).flip())
+            viewportState.pScissors(VkRect2D.calloc(1, stack).put(scissor).flip())
+
+            val rasterizer = VkPipelineRasterizationStateCreateInfo.calloc(stack)
+            rasterizer.sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO)
+            rasterizer.depthClampEnable(false)
+            rasterizer.rasterizerDiscardEnable(false)
+            rasterizer.polygonMode(VK_POLYGON_MODE_FILL)
+            rasterizer.lineWidth(1.0f)
+            rasterizer.cullMode(VK_CULL_MODE_BACK_BIT)
+            rasterizer.frontFace(VK_FRONT_FACE_CLOCKWISE)
+            rasterizer.depthBiasEnable(false)
+
+            val multisampling = VkPipelineMultisampleStateCreateInfo.calloc(stack)
+            multisampling.sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO)
+            multisampling.sampleShadingEnable(false)
+            multisampling.rasterizationSamples(VK_SAMPLE_COUNT_1_BIT)
+
+            val colorBlendAttachment = VkPipelineColorBlendAttachmentState.calloc(stack)
+            colorBlendAttachment.colorWriteMask(VK_COLOR_COMPONENT_R_BIT or VK_COLOR_COMPONENT_G_BIT or VK_COLOR_COMPONENT_B_BIT or VK_COLOR_COMPONENT_A_BIT)
+            colorBlendAttachment.blendEnable(false)
+
+            val colorBlending = VkPipelineColorBlendStateCreateInfo.calloc(stack)
+            colorBlending.sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO)
+            colorBlending.logicOpEnable(false)
+            colorBlending.logicOp(VK_LOGIC_OP_COPY)
+            colorBlending.pAttachments(VkPipelineColorBlendAttachmentState.calloc(1, stack).put(colorBlendAttachment).flip())
+
+            val pipelineLayoutInfo = VkPipelineLayoutCreateInfo.calloc(stack)
+            pipelineLayoutInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
+
+            val pPipelineLayout = stack.mallocLong(1)
+            if (vkCreatePipelineLayout(logicalDevice!!, pipelineLayoutInfo, null, pPipelineLayout) != VK_SUCCESS) {
+                throw RuntimeException("Failed to create pipeline layout")
+            }
+            pipelineLayout = pPipelineLayout.get(0)
+
+            vkDestroyShaderModule(logicalDevice!!, vertShaderModule, null)
+            vkDestroyShaderModule(logicalDevice!!, fragShaderModule, null)
+        }
+    }
+
+    private fun createShaderModule(stack: MemoryStack, code: ByteArray): Long {
+        val createInfo = VkShaderModuleCreateInfo.calloc(stack)
+        createInfo.sType(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO)
+        createInfo.pCode(stack.bytes(*code))
+        val pShaderModule = stack.mallocLong(1)
+        if (vkCreateShaderModule(logicalDevice!!, createInfo, null, pShaderModule) != VK_SUCCESS) {
+            throw RuntimeException("Failed to create shader module")
+        }
+        return pShaderModule.get(0)
+    }
+
     private fun pLoop() {
         while (!glfwWindowShouldClose(window!!)) {
             loop(window!!)
@@ -447,6 +547,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
                 vkDestroyDebugUtilsMessengerEXT(vulkan!!, debugMessenger!!, null)
             }
 
+            vkDestroyPipelineLayout(logicalDevice!!, pipelineLayout!!, null)
             swapChainImageViews!!.forEach {
                 vkDestroyImageView(logicalDevice!!, it, null)
             }
