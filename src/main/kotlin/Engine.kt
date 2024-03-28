@@ -15,7 +15,7 @@ import utils.loadShader
 import utils.toList
 import utils.toPointerBuffer
 
-abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 
     private var window: Long? = null
     private var vulkan: VkInstance? = null
@@ -31,9 +31,11 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
     private var swapChainImages: List<Long>? = null
     private var swapChainImageViews: List<Long>? = null
     private var swapChainImageFormat: Int? = null
-    private var swapChainExtent: VkExtent2D? = null
     private var renderPass: Long? = null
     private var pipelineLayout: Long? = null
+    private var graphicsPipeline: Long? = null
+    private var windowSize = defaultSize
+    private var swapChainFramebuffers: List<Long>? = null
 
     fun run() {
         try {
@@ -59,7 +61,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API)
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE)
 
-        window = glfwCreateWindow(size.x, size.y, "Vulkan", NULL, NULL)
+        window = glfwCreateWindow(defaultSize.x, defaultSize.y, "Vulkan", NULL, NULL)
         if (window == NULL) {
             throw RuntimeException("Failed to create the GLFW window")
         }
@@ -68,8 +70,8 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
 
         glfwSetWindowPos(
             window!!,
-            (vidmode.width() - size.x) / 2,
-            (vidmode.height() - size.y) / 2
+            (vidmode.width() - defaultSize.x) / 2,
+            (vidmode.height() - defaultSize.y) / 2
         )
 
         glfwMakeContextCurrent(window!!)
@@ -89,6 +91,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
         createImageViews()
         createRenderPass()
         createGraphicsPipeline()
+        createFramebuffers()
     }
 
     private fun createInstance() {
@@ -375,7 +378,6 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
             swapChainImages = pSwapChainImages.toList()
 
             swapChainImageFormat = surfaceFormat.format()
-            swapChainExtent = extent
         }
     }
 
@@ -392,11 +394,11 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
         return capabilities.currentExtent().let {
             if (it.width() != Int.MAX_VALUE) it
             else {
-                val actualExtent = VkExtent2D.calloc(stack).set(size.x, size.y)
+                val actualExtent = VkExtent2D.calloc(stack).set(defaultSize.x, defaultSize.y)
                 actualExtent.apply {
                     width(width().coerceAtMost(capabilities.maxImageExtent().width()).coerceAtLeast(capabilities.minImageExtent().width()))
                     height(height().coerceAtMost(capabilities.maxImageExtent().height()).coerceAtLeast(capabilities.minImageExtent().height()))
-                }
+                }.also { extent -> windowSize = Vec2(extent.width(), extent.height()) }
             }
         }
     }
@@ -467,6 +469,8 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
 
     private fun createGraphicsPipeline() {
         MemoryStack.stackPush().use { stack ->
+            val swapChainExtent = VkExtent2D.calloc(stack).set(windowSize.x, windowSize.y)
+
             val vertShaderModule = createShaderModule(stack, loadShader("vert.spv"))
             val fragShaderModule = createShaderModule(stack, loadShader("frag.spv"))
 
@@ -498,14 +502,14 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
             val viewport = VkViewport.calloc(stack)
             viewport.x(0.0f)
             viewport.y(0.0f)
-            viewport.width(swapChainExtent!!.width().toFloat())
-            viewport.height(swapChainExtent!!.height().toFloat())
+            viewport.width(swapChainExtent.width().toFloat())
+            viewport.height(swapChainExtent.height().toFloat())
             viewport.minDepth(0.0f)
             viewport.maxDepth(1.0f)
 
             val scissor = VkRect2D.calloc(stack)
             scissor.offset { it.x(0).y(0) }
-            scissor.extent(swapChainExtent!!)
+            scissor.extent(swapChainExtent)
 
             val viewportState = VkPipelineViewportStateCreateInfo.calloc(stack)
             viewportState.sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO)
@@ -546,6 +550,27 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
             }
             pipelineLayout = pPipelineLayout.get(0)
 
+            val pipelineInfo = VkGraphicsPipelineCreateInfo.calloc(stack)
+            pipelineInfo.sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO)
+            pipelineInfo.pStages(shaderStages)
+            pipelineInfo.pVertexInputState(vertexInputInfo)
+            pipelineInfo.pInputAssemblyState(inputAssembly)
+            pipelineInfo.pViewportState(viewportState)
+            pipelineInfo.pRasterizationState(rasterizer)
+            pipelineInfo.pMultisampleState(multisampling)
+            pipelineInfo.pColorBlendState(colorBlending)
+            pipelineInfo.layout(pipelineLayout!!)
+            pipelineInfo.renderPass(renderPass!!)
+            pipelineInfo.subpass(0)
+
+            val pipelineInfos = VkGraphicsPipelineCreateInfo.calloc(1, stack).put(pipelineInfo).flip()
+
+            val pGraphicsPipeline = stack.mallocLong(1)
+            if (vkCreateGraphicsPipelines(logicalDevice!!, VK_NULL_HANDLE, pipelineInfos, null, pGraphicsPipeline) != VK_SUCCESS) {
+                throw RuntimeException("Failed to create graphics pipeline")
+            }
+            graphicsPipeline = pGraphicsPipeline.get(0)
+
             vkDestroyShaderModule(logicalDevice!!, vertShaderModule, null)
             vkDestroyShaderModule(logicalDevice!!, fragShaderModule, null)
         }
@@ -560,6 +585,26 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
             throw RuntimeException("Failed to create shader module")
         }
         return pShaderModule.get(0)
+    }
+
+    private fun createFramebuffers() {
+        MemoryStack.stackPush().use { stack ->
+            swapChainFramebuffers = swapChainImageViews!!.map {
+                val attachments = stack.longs(it)
+                val framebufferInfo = VkFramebufferCreateInfo.calloc(stack)
+                framebufferInfo.sType(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO)
+                framebufferInfo.renderPass(renderPass!!)
+                framebufferInfo.pAttachments(attachments)
+                framebufferInfo.width(windowSize.x)
+                framebufferInfo.height(windowSize.y)
+                framebufferInfo.layers(1)
+                val pFramebuffer = stack.mallocLong(1)
+                if (vkCreateFramebuffer(logicalDevice!!, framebufferInfo, null, pFramebuffer) != VK_SUCCESS) {
+                    throw RuntimeException("Failed to create framebuffer")
+                }
+                pFramebuffer.get(0)
+            }
+        }
     }
 
     private fun pLoop() {
@@ -583,6 +628,10 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
                 vkDestroyDebugUtilsMessengerEXT(vulkan!!, debugMessenger!!, null)
             }
 
+            swapChainFramebuffers!!.forEach {
+                vkDestroyFramebuffer(logicalDevice!!, it, null)
+            }
+            vkDestroyPipeline(logicalDevice!!, graphicsPipeline!!, null)
             vkDestroyPipelineLayout(logicalDevice!!, pipelineLayout!!, null)
             vkDestroyRenderPass(logicalDevice!!, renderPass!!, null)
             swapChainImageViews!!.forEach {
