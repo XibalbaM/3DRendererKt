@@ -14,6 +14,7 @@ import org.lwjgl.vulkan.KHRSwapchain.*
 import utils.loadShader
 import utils.toList
 import utils.toPointerBuffer
+import java.lang.invoke.MethodHandles.loop
 
 abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 
@@ -36,6 +37,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
     private var graphicsPipeline: Long? = null
     private var windowSize = defaultSize
     private var swapChainFramebuffers: List<Long>? = null
+    private var commandPool: Long? = null
+    private var commandBuffers: VkCommandBuffer? = null
 
     fun run() {
         try {
@@ -92,6 +95,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         createRenderPass()
         createGraphicsPipeline()
         createFramebuffers()
+        createCommandPool()
+        createCommandBuffers()
     }
 
     private fun createInstance() {
@@ -607,6 +612,75 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         }
     }
 
+    private fun createCommandPool() {
+        MemoryStack.stackPush().use { stack ->
+            val queueFamilyIndices = findQueueFamilies(physicalDevice!!)
+            val poolInfo = VkCommandPoolCreateInfo.calloc(stack)
+            poolInfo.sType(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO)
+            poolInfo.flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT)
+            poolInfo.queueFamilyIndex(queueFamilyIndices.graphicsFamily!!)
+
+            val pCommandPool = stack.mallocLong(1)
+            if (vkCreateCommandPool(logicalDevice!!, poolInfo, null, pCommandPool) != VK_SUCCESS) {
+                throw RuntimeException("Failed to create command pool")
+            }
+            commandPool = pCommandPool.get(0)
+        }
+    }
+
+    private fun createCommandBuffers() {
+        MemoryStack.stackPush().use { stack ->
+            val allocInfo = VkCommandBufferAllocateInfo.calloc(stack)
+            allocInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO)
+            allocInfo.commandPool(commandPool!!)
+            allocInfo.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+            allocInfo.commandBufferCount(1)
+
+            val pCommandBuffers = stack.mallocPointer(1)
+            if (vkAllocateCommandBuffers(logicalDevice!!, allocInfo, pCommandBuffers) != VK_SUCCESS) {
+                throw RuntimeException("Failed to allocate command buffers")
+            }
+            commandBuffers = VkCommandBuffer(pCommandBuffers.get(0), logicalDevice!!)
+        }
+    }
+
+    private fun recordCommandBuffer(stack: MemoryStack, commandBuffer: VkCommandBuffer, imageIndex: Int) {
+        val beginInfo = VkCommandBufferBeginInfo.calloc(stack)
+        beginInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO)
+
+        if (vkBeginCommandBuffer(commandBuffer, beginInfo) != VK_SUCCESS) {
+            throw RuntimeException("Failed to begin recording command buffer")
+        }
+
+        val renderPassInfo = VkRenderPassBeginInfo.calloc(stack)
+        renderPassInfo.sType(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO)
+        renderPassInfo.renderPass(renderPass!!)
+        renderPassInfo.framebuffer(swapChainFramebuffers!![imageIndex])
+        renderPassInfo.renderArea {
+            it.offset { offset -> offset.set(0, 0) }
+            it.extent { extent -> extent.set(windowSize.x, windowSize.y) }
+        }
+        val clearColor = VkClearValue.calloc(1, stack)
+        clearColor.color().float32(0, 0.0f)
+        clearColor.color().float32(1, 0.0f)
+        clearColor.color().float32(2, 0.0f)
+        clearColor.color().float32(3, 1.0f)
+        renderPassInfo.pClearValues(clearColor)
+        renderPassInfo.clearValueCount(1)
+
+        vkCmdBeginRenderPass(commandBuffer, renderPassInfo, VK_SUBPASS_CONTENTS_INLINE)
+
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline!!)
+        //TODO: make viewport and scissor dynamic
+        vkCmdDraw(commandBuffer, 3, 1, 0, 0)
+
+        vkCmdEndRenderPass(commandBuffer)
+
+        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+            throw RuntimeException("Failed to record command buffer")
+        }
+    }
+
     private fun pLoop() {
         while (!glfwWindowShouldClose(window!!)) {
             loop(window!!)
@@ -628,6 +702,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
                 vkDestroyDebugUtilsMessengerEXT(vulkan!!, debugMessenger!!, null)
             }
 
+            vkDestroyCommandPool(logicalDevice!!, commandPool!!, null)
             swapChainFramebuffers!!.forEach {
                 vkDestroyFramebuffer(logicalDevice!!, it, null)
             }
