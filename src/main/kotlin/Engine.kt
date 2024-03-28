@@ -38,6 +38,9 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
     private var swapChainFramebuffers: List<Long>? = null
     private var commandPool: Long? = null
     private var commandBuffers: VkCommandBuffer? = null
+    private var imageAvailableSemaphore: Long? = null
+    private var renderFinishedSemaphore: Long? = null
+    private var inFlightFence: Long? = null
 
     fun run() {
         try {
@@ -93,6 +96,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         createFramebuffers()
         createCommandPool()
         createCommandBuffers()
+        createSyncObjects()
     }
 
     private fun createInstance() {
@@ -455,10 +459,19 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
             subpass.colorAttachmentCount(1)
             subpass.pColorAttachments(VkAttachmentReference.calloc(1, stack).put(colorAttachmentRef).flip())
 
+            val dependency = VkSubpassDependency.calloc(1, stack)
+            dependency.srcSubpass(VK_SUBPASS_EXTERNAL)
+            dependency.dstSubpass(0)
+            dependency.srcStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
+            dependency.srcAccessMask(0)
+            dependency.dstStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
+            dependency.dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
+
             val renderPassInfo = VkRenderPassCreateInfo.calloc(stack)
             renderPassInfo.sType(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO)
             renderPassInfo.pAttachments(VkAttachmentDescription.calloc(1, stack).put(colorAttachment).flip())
             renderPassInfo.pSubpasses(VkSubpassDescription.calloc(1, stack).put(subpass).flip())
+            renderPassInfo.pDependencies(VkSubpassDependency.calloc(1, stack).put(dependency).flip())
 
             val pRenderPass = stack.mallocLong(1)
             if (vkCreateRenderPass(logicalDevice!!, renderPassInfo, null, pRenderPass) != VK_SUCCESS) {
@@ -640,6 +653,79 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         }
     }
 
+    private fun createSyncObjects() {
+        MemoryStack.stackPush().use { stack ->
+            val semaphoreInfo = VkSemaphoreCreateInfo.calloc(stack)
+            semaphoreInfo.sType(VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO)
+
+            val fenceInfo = VkFenceCreateInfo.calloc(stack)
+            fenceInfo.sType(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO)
+            fenceInfo.flags(VK_FENCE_CREATE_SIGNALED_BIT)
+
+            val pImageAvailableSemaphore = stack.mallocLong(1)
+            val pRenderFinishedSemaphore = stack.mallocLong(1)
+            val pInFlightFence = stack.mallocLong(1)
+            if (vkCreateSemaphore(logicalDevice!!, semaphoreInfo, null, pImageAvailableSemaphore) != VK_SUCCESS ||
+                vkCreateSemaphore(logicalDevice!!, semaphoreInfo, null, pRenderFinishedSemaphore) != VK_SUCCESS ||
+                vkCreateFence(logicalDevice!!, fenceInfo, null, pInFlightFence) != VK_SUCCESS) {
+                throw RuntimeException("Failed to create synchronization objects")
+            }
+            imageAvailableSemaphore = pImageAvailableSemaphore.get(0)
+            renderFinishedSemaphore = pRenderFinishedSemaphore.get(0)
+            inFlightFence = pInFlightFence.get(0)
+        }
+    }
+
+    private fun pLoop() {
+        while (!glfwWindowShouldClose(window!!)) {
+
+            drawFrame()
+
+            glfwPollEvents()
+        }
+        vkDeviceWaitIdle(logicalDevice!!)
+    }
+
+    private fun drawFrame() {
+        MemoryStack.stackPush().use { stack ->
+            vkWaitForFences(logicalDevice!!, inFlightFence!!, true, Long.MAX_VALUE)
+            vkResetFences(logicalDevice!!, inFlightFence!!)
+
+            val pImageIndex = stack.ints(0)
+            vkAcquireNextImageKHR(logicalDevice!!, swapChain!!, Long.MAX_VALUE, imageAvailableSemaphore!!, VK_NULL_HANDLE, pImageIndex)
+            val imageIndex = pImageIndex.get(0)
+
+            vkResetCommandBuffer(commandBuffers!!, 0)
+
+            recordCommandBuffer(stack, commandBuffers!!, imageIndex)
+
+            val submitInfo = VkSubmitInfo.calloc(stack)
+            submitInfo.sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
+            val waitSemaphore = stack.longs(imageAvailableSemaphore!!)
+            val waitStages = stack.ints(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
+            submitInfo.waitSemaphoreCount(1)
+            submitInfo.pWaitSemaphores(waitSemaphore)
+            submitInfo.pWaitDstStageMask(waitStages)
+            submitInfo.pCommandBuffers(stack.pointers(commandBuffers!!))
+            val signalSemaphore = stack.longs(renderFinishedSemaphore!!)
+            submitInfo.pSignalSemaphores(signalSemaphore)
+
+            if (vkQueueSubmit(graphicsQueue!!, submitInfo, inFlightFence!!) != VK_SUCCESS) {
+                throw RuntimeException("Failed to submit draw command buffer")
+            }
+
+            val presentInfo = VkPresentInfoKHR.calloc(stack)
+            presentInfo.sType(VK_STRUCTURE_TYPE_PRESENT_INFO_KHR)
+            presentInfo.pWaitSemaphores(signalSemaphore)
+            val swapChains = stack.longs(swapChain!!)
+            presentInfo.pSwapchains(swapChains)
+            presentInfo.swapchainCount(swapChains.capacity())
+            presentInfo.pImageIndices(pImageIndex)
+
+            vkQueuePresentKHR(presentQueue!!, presentInfo)
+        }
+    }
+
     private fun recordCommandBuffer(stack: MemoryStack, commandBuffer: VkCommandBuffer, imageIndex: Int) {
         val beginInfo = VkCommandBufferBeginInfo.calloc(stack)
         beginInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO)
@@ -677,15 +763,6 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         }
     }
 
-    private fun pLoop() {
-        while (!glfwWindowShouldClose(window!!)) {
-
-            glfwSwapBuffers(window!!)
-
-            glfwPollEvents()
-        }
-    }
-
     private fun pCleanup() {
         try {
 
@@ -693,6 +770,9 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
                 vkDestroyDebugUtilsMessengerEXT(vulkan!!, debugMessenger!!, null)
             }
 
+            vkDestroySemaphore(logicalDevice!!, renderFinishedSemaphore!!, null)
+            vkDestroySemaphore(logicalDevice!!, imageAvailableSemaphore!!, null)
+            vkDestroyFence(logicalDevice!!, inFlightFence!!, null)
             vkDestroyCommandPool(logicalDevice!!, commandPool!!, null)
             swapChainFramebuffers!!.forEach {
                 vkDestroyFramebuffer(logicalDevice!!, it, null)
