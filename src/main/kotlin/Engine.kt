@@ -32,6 +32,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
     private var swapChainImageViews: List<Long>? = null
     private var swapChainImageFormat: Int? = null
     private var swapChainExtent: VkExtent2D? = null
+    private var renderPass: Long? = null
     private var pipelineLayout: Long? = null
 
     fun run() {
@@ -86,6 +87,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
         createLogicalDevice()
         createSwapChain()
         createImageViews()
+        createRenderPass()
         createGraphicsPipeline()
     }
 
@@ -429,6 +431,40 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
         }
     }
 
+    private fun createRenderPass() {
+        MemoryStack.stackPush().use { stack ->
+            val colorAttachment = VkAttachmentDescription.calloc(1, stack)
+            colorAttachment.format(swapChainImageFormat!!)
+            colorAttachment.samples(VK_SAMPLE_COUNT_1_BIT)
+            colorAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
+            colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_STORE)
+            colorAttachment.stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+            colorAttachment.stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+            colorAttachment.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
+            colorAttachment.finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
+
+            val colorAttachmentRef = VkAttachmentReference.calloc(1, stack)
+            colorAttachmentRef.attachment(0)
+            colorAttachmentRef.layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+
+            val subpass = VkSubpassDescription.calloc(1, stack)
+            subpass.pipelineBindPoint(VK_PIPELINE_BIND_POINT_GRAPHICS)
+            subpass.colorAttachmentCount(1)
+            subpass.pColorAttachments(VkAttachmentReference.calloc(1, stack).put(colorAttachmentRef).flip())
+
+            val renderPassInfo = VkRenderPassCreateInfo.calloc(stack)
+            renderPassInfo.sType(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO)
+            renderPassInfo.pAttachments(VkAttachmentDescription.calloc(1, stack).put(colorAttachment).flip())
+            renderPassInfo.pSubpasses(VkSubpassDescription.calloc(1, stack).put(subpass).flip())
+
+            val pRenderPass = stack.mallocLong(1)
+            if (vkCreateRenderPass(logicalDevice!!, renderPassInfo, null, pRenderPass) != VK_SUCCESS) {
+                throw RuntimeException("Failed to create render pass")
+            }
+            renderPass = pRenderPass.get(0)
+        }
+    }
+
     private fun createGraphicsPipeline() {
         MemoryStack.stackPush().use { stack ->
             val vertShaderModule = createShaderModule(stack, loadShader("vert.spv"))
@@ -548,6 +584,7 @@ abstract class Engine(private val size: Vec2<Int>, private val logLevel: Int = V
             }
 
             vkDestroyPipelineLayout(logicalDevice!!, pipelineLayout!!, null)
+            vkDestroyRenderPass(logicalDevice!!, renderPass!!, null)
             swapChainImageViews!!.forEach {
                 vkDestroyImageView(logicalDevice!!, it, null)
             }
