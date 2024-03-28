@@ -14,7 +14,6 @@ import org.lwjgl.vulkan.KHRSwapchain.*
 import utils.loadShader
 import utils.toList
 import utils.toPointerBuffer
-import java.lang.invoke.MethodHandles.loop
 
 abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 
