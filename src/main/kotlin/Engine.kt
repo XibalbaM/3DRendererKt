@@ -683,6 +683,26 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         }
     }
 
+    private fun recreateSwapChain() {
+        vkDeviceWaitIdle(logicalDevice!!)
+
+        cleanupSwapChain()
+
+        createSwapChain()
+        createImageViews()
+        createFramebuffers()
+    }
+
+    private fun cleanupSwapChain() {
+        swapChainFramebuffers!!.forEach {
+            vkDestroyFramebuffer(logicalDevice!!, it, null)
+        }
+        swapChainImageViews!!.forEach {
+            vkDestroyImageView(logicalDevice!!, it, null)
+        }
+        vkDestroySwapchainKHR(logicalDevice!!, swapChain!!, null)
+    }
+
     private fun pLoop() {
         while (!glfwWindowShouldClose(window!!)) {
 
@@ -699,7 +719,13 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
             vkResetFences(logicalDevice!!, inFlightFence[currentFrame])
 
             val pImageIndex = stack.ints(0)
-            vkAcquireNextImageKHR(logicalDevice!!, swapChain!!, Long.MAX_VALUE, imageAvailableSemaphore[currentFrame], VK_NULL_HANDLE, pImageIndex)
+            val result = vkAcquireNextImageKHR(logicalDevice!!, swapChain!!, Long.MAX_VALUE, imageAvailableSemaphore[currentFrame], VK_NULL_HANDLE, pImageIndex)
+            if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+                recreateSwapChain()
+                return
+            } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+                throw RuntimeException("Failed to acquire swap chain image")
+            }
             val imageIndex = pImageIndex.get(0)
             vkResetCommandBuffer(commandBuffers[currentFrame]!!, 0)
 
@@ -773,31 +799,30 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
 
     private fun pCleanup() {
         try {
+            cleanupSwapChain()
 
-            if (DEBUG.get(true)) {
-                vkDestroyDebugUtilsMessengerEXT(vulkan!!, debugMessenger!!, null)
-            }
+            vkDestroyPipeline(logicalDevice!!, graphicsPipeline!!, null)
+            vkDestroyPipelineLayout(logicalDevice!!, pipelineLayout!!, null)
+
+            vkDestroyRenderPass(logicalDevice!!, renderPass!!, null)
 
             for (i in 0 until MAX_FRAMES_IN_FLIGHT) {
                 vkDestroySemaphore(logicalDevice!!, renderFinishedSemaphore[i], null)
                 vkDestroySemaphore(logicalDevice!!, imageAvailableSemaphore[i], null)
                 vkDestroyFence(logicalDevice!!, inFlightFence[i], null)
             }
-            vkDestroyCommandPool(logicalDevice!!, commandPool!!, null)
-            swapChainFramebuffers!!.forEach {
-                vkDestroyFramebuffer(logicalDevice!!, it, null)
-            }
-            vkDestroyPipeline(logicalDevice!!, graphicsPipeline!!, null)
-            vkDestroyPipelineLayout(logicalDevice!!, pipelineLayout!!, null)
-            vkDestroyRenderPass(logicalDevice!!, renderPass!!, null)
-            swapChainImageViews!!.forEach {
-                vkDestroyImageView(logicalDevice!!, it, null)
-            }
-            vkDestroySwapchainKHR(logicalDevice!!, swapChain!!, null)
-            vkDestroyDevice(logicalDevice!!, null)
-            vkDestroySurfaceKHR(vulkan!!, surface!!, null)
 
+            vkDestroyCommandPool(logicalDevice!!, commandPool!!, null)
+
+            vkDestroyDevice(logicalDevice!!, null)
+
+            if (DEBUG.get(true)) {
+                vkDestroyDebugUtilsMessengerEXT(vulkan!!, debugMessenger!!, null)
+            }
+
+            vkDestroySurfaceKHR(vulkan!!, surface!!, null)
             vkDestroyInstance(vulkan!!, null)
+
             glfwDestroyWindow(window!!)
         } finally {
             glfwTerminate()
