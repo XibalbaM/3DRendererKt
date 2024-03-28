@@ -17,6 +17,8 @@ import utils.toPointerBuffer
 
 abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 
+    private val MAX_FRAMES_IN_FLIGHT = 2
+
     private var window: Long? = null
     private var vulkan: VkInstance? = null
     private val validationLayers = if (DEBUG.get(true)) listOf("VK_LAYER_KHRONOS_validation") else emptyList()
@@ -37,10 +39,11 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
     private var windowSize = defaultSize
     private var swapChainFramebuffers: List<Long>? = null
     private var commandPool: Long? = null
-    private var commandBuffers: VkCommandBuffer? = null
-    private var imageAvailableSemaphore: Long? = null
-    private var renderFinishedSemaphore: Long? = null
-    private var inFlightFence: Long? = null
+    private var commandBuffers: MutableList<VkCommandBuffer?> = MutableList(MAX_FRAMES_IN_FLIGHT) { null }
+    private var imageAvailableSemaphore: MutableList<Long> = MutableList(MAX_FRAMES_IN_FLIGHT) { VK_NULL_HANDLE }
+    private var renderFinishedSemaphore: MutableList<Long> = MutableList(MAX_FRAMES_IN_FLIGHT) { VK_NULL_HANDLE }
+    private var inFlightFence: MutableList<Long> = MutableList(MAX_FRAMES_IN_FLIGHT) { VK_NULL_HANDLE }
+    private var currentFrame = 0
 
     fun run() {
         try {
@@ -645,11 +648,13 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
             allocInfo.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
             allocInfo.commandBufferCount(1)
 
-            val pCommandBuffers = stack.mallocPointer(1)
-            if (vkAllocateCommandBuffers(logicalDevice!!, allocInfo, pCommandBuffers) != VK_SUCCESS) {
-                throw RuntimeException("Failed to allocate command buffers")
+            for (i in 0 until MAX_FRAMES_IN_FLIGHT) {
+                val pCommandBuffers = stack.mallocPointer(1)
+                if (vkAllocateCommandBuffers(logicalDevice!!, allocInfo, pCommandBuffers) != VK_SUCCESS) {
+                    throw RuntimeException("Failed to allocate command buffers")
+                }
+                commandBuffers[i] = VkCommandBuffer(pCommandBuffers.get(0), logicalDevice!!)
             }
-            commandBuffers = VkCommandBuffer(pCommandBuffers.get(0), logicalDevice!!)
         }
     }
 
@@ -662,17 +667,19 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
             fenceInfo.sType(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO)
             fenceInfo.flags(VK_FENCE_CREATE_SIGNALED_BIT)
 
-            val pImageAvailableSemaphore = stack.mallocLong(1)
-            val pRenderFinishedSemaphore = stack.mallocLong(1)
-            val pInFlightFence = stack.mallocLong(1)
-            if (vkCreateSemaphore(logicalDevice!!, semaphoreInfo, null, pImageAvailableSemaphore) != VK_SUCCESS ||
-                vkCreateSemaphore(logicalDevice!!, semaphoreInfo, null, pRenderFinishedSemaphore) != VK_SUCCESS ||
-                vkCreateFence(logicalDevice!!, fenceInfo, null, pInFlightFence) != VK_SUCCESS) {
-                throw RuntimeException("Failed to create synchronization objects")
+            for (i in 0 until MAX_FRAMES_IN_FLIGHT) {
+                val pImageAvailableSemaphore = stack.mallocLong(1)
+                val pRenderFinishedSemaphore = stack.mallocLong(1)
+                val pInFlightFence = stack.mallocLong(1)
+                if (vkCreateSemaphore(logicalDevice!!, semaphoreInfo, null, pImageAvailableSemaphore) != VK_SUCCESS ||
+                    vkCreateSemaphore(logicalDevice!!, semaphoreInfo, null, pRenderFinishedSemaphore) != VK_SUCCESS ||
+                    vkCreateFence(logicalDevice!!, fenceInfo, null, pInFlightFence) != VK_SUCCESS) {
+                    throw RuntimeException("Failed to create synchronization objects")
+                }
+                imageAvailableSemaphore[i] = pImageAvailableSemaphore.get(0)
+                renderFinishedSemaphore[i] = pRenderFinishedSemaphore.get(0)
+                inFlightFence[i] = pInFlightFence.get(0)
             }
-            imageAvailableSemaphore = pImageAvailableSemaphore.get(0)
-            renderFinishedSemaphore = pRenderFinishedSemaphore.get(0)
-            inFlightFence = pInFlightFence.get(0)
         }
     }
 
@@ -688,29 +695,28 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
 
     private fun drawFrame() {
         MemoryStack.stackPush().use { stack ->
-            vkWaitForFences(logicalDevice!!, inFlightFence!!, true, Long.MAX_VALUE)
-            vkResetFences(logicalDevice!!, inFlightFence!!)
+            vkWaitForFences(logicalDevice!!, inFlightFence[currentFrame], true, Long.MAX_VALUE)
+            vkResetFences(logicalDevice!!, inFlightFence[currentFrame])
 
             val pImageIndex = stack.ints(0)
-            vkAcquireNextImageKHR(logicalDevice!!, swapChain!!, Long.MAX_VALUE, imageAvailableSemaphore!!, VK_NULL_HANDLE, pImageIndex)
+            vkAcquireNextImageKHR(logicalDevice!!, swapChain!!, Long.MAX_VALUE, imageAvailableSemaphore[currentFrame], VK_NULL_HANDLE, pImageIndex)
             val imageIndex = pImageIndex.get(0)
+            vkResetCommandBuffer(commandBuffers[currentFrame]!!, 0)
 
-            vkResetCommandBuffer(commandBuffers!!, 0)
-
-            recordCommandBuffer(stack, commandBuffers!!, imageIndex)
+            recordCommandBuffer(stack, commandBuffers[currentFrame]!!, imageIndex)
 
             val submitInfo = VkSubmitInfo.calloc(stack)
             submitInfo.sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
-            val waitSemaphore = stack.longs(imageAvailableSemaphore!!)
+            val waitSemaphore = stack.longs(imageAvailableSemaphore[currentFrame])
             val waitStages = stack.ints(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
             submitInfo.waitSemaphoreCount(1)
             submitInfo.pWaitSemaphores(waitSemaphore)
             submitInfo.pWaitDstStageMask(waitStages)
-            submitInfo.pCommandBuffers(stack.pointers(commandBuffers!!))
-            val signalSemaphore = stack.longs(renderFinishedSemaphore!!)
+            submitInfo.pCommandBuffers(stack.pointers(commandBuffers[currentFrame]!!))
+            val signalSemaphore = stack.longs(renderFinishedSemaphore[currentFrame])
             submitInfo.pSignalSemaphores(signalSemaphore)
 
-            if (vkQueueSubmit(graphicsQueue!!, submitInfo, inFlightFence!!) != VK_SUCCESS) {
+            if (vkQueueSubmit(graphicsQueue!!, submitInfo, inFlightFence[currentFrame]) != VK_SUCCESS) {
                 throw RuntimeException("Failed to submit draw command buffer")
             }
 
@@ -723,6 +729,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
             presentInfo.pImageIndices(pImageIndex)
 
             vkQueuePresentKHR(presentQueue!!, presentInfo)
+
+            currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT
         }
     }
 
@@ -770,9 +778,11 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
                 vkDestroyDebugUtilsMessengerEXT(vulkan!!, debugMessenger!!, null)
             }
 
-            vkDestroySemaphore(logicalDevice!!, renderFinishedSemaphore!!, null)
-            vkDestroySemaphore(logicalDevice!!, imageAvailableSemaphore!!, null)
-            vkDestroyFence(logicalDevice!!, inFlightFence!!, null)
+            for (i in 0 until MAX_FRAMES_IN_FLIGHT) {
+                vkDestroySemaphore(logicalDevice!!, renderFinishedSemaphore[i], null)
+                vkDestroySemaphore(logicalDevice!!, imageAvailableSemaphore[i], null)
+                vkDestroyFence(logicalDevice!!, inFlightFence[i], null)
+            }
             vkDestroyCommandPool(logicalDevice!!, commandPool!!, null)
             swapChainFramebuffers!!.forEach {
                 vkDestroyFramebuffer(logicalDevice!!, it, null)
