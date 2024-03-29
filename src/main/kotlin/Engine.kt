@@ -1,5 +1,4 @@
-import fr.xibalba.math.Vec2
-import fr.xibalba.math.Vec3
+import fr.xibalba.math.*
 import org.lwjgl.PointerBuffer
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.glfw.GLFWVulkan.glfwCreateWindowSurface
@@ -59,11 +58,15 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
 
     private var vertexBuffer: Long? = null
     private var vertexBufferMemory: Long? = null
+    private var indexBuffer: Long? = null
+    private var indexBufferMemory: Long? = null
     private val vertices = listOf(
-        Vertex(Vec2(-1.0f, -1.0f), Vec3(1.0f, 0.0f, 0.0f)),
-        Vertex(Vec2(1.0f, -1.0f), Vec3(0.0f, 1.0f, 0.0f)),
-        Vertex(Vec2(-1.0f, 1.0f), Vec3(0.0f, 0.0f, 1.0f)),
+        Vertex(Vec2(-0.5f, -0.5f), Vec3(1.0f, 0.0f, 0.0f)),
+        Vertex(Vec2(0.5f, -0.5f), Vec3(0.0f, 1.0f, 0.0f)),
+        Vertex(Vec2(0.5f, 0.5f), Vec3(0.0f, 0.0f, 1.0f)),
+        Vertex(Vec2(-0.5f, 0.5f), Vec3(1.0f, 1.0f, 1.0f))
     )
+    private val indices = listOf(0, 1, 2, 2, 3, 0)
 
     fun run() {
         try {
@@ -116,6 +119,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         createCommandPools()
         createSwapChainObjects()
         createVertexBuffer()
+        createIndexBuffer()
         createSyncObjects()
     }
 
@@ -727,6 +731,35 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         }
     }
 
+    private fun createIndexBuffer() {
+        MemoryStack.stackPush().use { stack ->
+            val size = (indices.size * Integer.BYTES).toLong()
+            val pStagingBuffer = stack.mallocLong(1)
+            val pStagingMemory = stack.mallocLong(1)
+            createBuffer(stack, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, pStagingBuffer, pStagingMemory, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+
+            val data = stack.mallocPointer(1)
+            vkMapMemory(logicalDevice!!, pStagingMemory.get(0), 0, size, 0, data)
+            data.getByteBuffer(0, size.toInt()).apply {
+                for (index in indices) {
+                    putInt(index)
+                }
+            }
+            vkUnmapMemory(logicalDevice!!, pStagingMemory.get())
+
+            val pIndexBuffer = stack.mallocLong(1)
+            val pIndexMemory = stack.mallocLong(1)
+            createBuffer(stack, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT or VK_BUFFER_USAGE_INDEX_BUFFER_BIT, pIndexBuffer, pIndexMemory, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+            indexBuffer = pIndexBuffer.get(0)
+            indexBufferMemory = pIndexMemory.get(0)
+
+            copyBuffer(stack, pStagingBuffer.get(0), indexBuffer!!, size)
+
+            vkDestroyBuffer(logicalDevice!!, pStagingBuffer.get(0), null)
+            vkFreeMemory(logicalDevice!!, pStagingMemory.get(0), null)
+        }
+    }
+
     private fun findMemoryType(stack: MemoryStack, typeFilter: Int, properties: Int): Int {
         val memProperties = VkPhysicalDeviceMemoryProperties.calloc(stack)
         vkGetPhysicalDeviceMemoryProperties(physicalDevice!!, memProperties)
@@ -963,8 +996,9 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         val buffer = stack.longs(vertexBuffer!!)
         val offsets = stack.longs(0)
         vkCmdBindVertexBuffers(commandBuffer, 0, buffer, offsets)
+        vkCmdBindIndexBuffer(commandBuffer, indexBuffer!!, 0, VK_INDEX_TYPE_UINT32)
 
-        vkCmdDraw(commandBuffer, 3, 1, 0, 0)
+        vkCmdDrawIndexed(commandBuffer, indices.size, 1, 0, 0, 0)
 
         vkCmdEndRenderPass(commandBuffer)
 
@@ -977,6 +1011,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         try {
             cleanupSwapChain()
 
+            vkDestroyBuffer(logicalDevice!!, indexBuffer!!, null)
+            vkFreeMemory(logicalDevice!!, indexBufferMemory!!, null)
             vkDestroyBuffer(logicalDevice!!, vertexBuffer!!, null)
             vkFreeMemory(logicalDevice!!, vertexBufferMemory!!, null)
 
