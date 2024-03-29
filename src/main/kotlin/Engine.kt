@@ -15,7 +15,7 @@ import utils.*
 import java.nio.IntBuffer
 import java.nio.LongBuffer
 
-abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = false, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 
     companion object {
         private const val MAX_FRAMES_IN_FLIGHT = 2
@@ -60,13 +60,16 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
     private var vertexBufferMemory: Long? = null
     private var indexBuffer: Long? = null
     private var indexBufferMemory: Long? = null
-    private val vertices = listOf(
+    private var vertices = listOf(
         Vertex(Vec2(-0.5f, -0.5f), Vec3(1.0f, 0.0f, 0.0f)),
         Vertex(Vec2(0.5f, -0.5f), Vec3(0.0f, 1.0f, 0.0f)),
         Vertex(Vec2(0.5f, 0.5f), Vec3(0.0f, 0.0f, 1.0f)),
         Vertex(Vec2(-0.5f, 0.5f), Vec3(1.0f, 1.0f, 1.0f))
     )
-    private val indices = listOf(0, 1, 2, 2, 3, 0)
+    private var indices = listOf(0, 1, 2, 2, 3, 0)
+
+    private var t = 0L
+    private var time = System.currentTimeMillis()
 
     fun run() {
         try {
@@ -701,51 +704,19 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
     private fun createVertexBuffer() {
         MemoryStack.stackPush().use { stack ->
             val size = (vertices.size * Vertex.SIZEOF).toLong()
-            val pStagingBuffer = stack.mallocLong(1)
-            val pStagingMemory = stack.mallocLong(1)
-            createBuffer(stack, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, pStagingBuffer, pStagingMemory, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
-
-            val data = stack.mallocPointer(1)
-            vkMapMemory(logicalDevice!!, pStagingMemory.get(0), 0, size, 0, data)
-            data.getByteBuffer(0, size.toInt()).apply {
-                for (vertex in vertices) {
-                    putFloat(vertex.position.x)
-                    putFloat(vertex.position.y)
-                    putFloat(vertex.color.x)
-                    putFloat(vertex.color.y)
-                    putFloat(vertex.color.z)
-                }
-            }
-            vkUnmapMemory(logicalDevice!!, pStagingMemory.get())
-
             val pVertexBuffer = stack.mallocLong(1)
             val pVertexMemory = stack.mallocLong(1)
             createBuffer(stack, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT or VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, pVertexBuffer, pVertexMemory, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
             vertexBuffer = pVertexBuffer.get(0)
             vertexBufferMemory = pVertexMemory.get(0)
 
-            copyBuffer(stack, pStagingBuffer.get(0), vertexBuffer!!, size)
-
-            vkDestroyBuffer(logicalDevice!!, pStagingBuffer.get(0), null)
-            vkFreeMemory(logicalDevice!!, pStagingMemory.get(0), null)
+            setVertices(stack, vertices)
         }
     }
 
     private fun createIndexBuffer() {
         MemoryStack.stackPush().use { stack ->
             val size = (indices.size * Integer.BYTES).toLong()
-            val pStagingBuffer = stack.mallocLong(1)
-            val pStagingMemory = stack.mallocLong(1)
-            createBuffer(stack, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, pStagingBuffer, pStagingMemory, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
-
-            val data = stack.mallocPointer(1)
-            vkMapMemory(logicalDevice!!, pStagingMemory.get(0), 0, size, 0, data)
-            data.getByteBuffer(0, size.toInt()).apply {
-                for (index in indices) {
-                    putInt(index)
-                }
-            }
-            vkUnmapMemory(logicalDevice!!, pStagingMemory.get())
 
             val pIndexBuffer = stack.mallocLong(1)
             val pIndexMemory = stack.mallocLong(1)
@@ -753,10 +724,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
             indexBuffer = pIndexBuffer.get(0)
             indexBufferMemory = pIndexMemory.get(0)
 
-            copyBuffer(stack, pStagingBuffer.get(0), indexBuffer!!, size)
-
-            vkDestroyBuffer(logicalDevice!!, pStagingBuffer.get(0), null)
-            vkFreeMemory(logicalDevice!!, pStagingMemory.get(0), null)
+            setIndices(stack, indices)
         }
     }
 
@@ -898,8 +866,76 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         vkDeviceWaitIdle(logicalDevice!!)
     }
 
+    private fun setVertices(stack: MemoryStack, newVertices: List<Vertex>) {
+        vertices = newVertices
+        val size = (vertices.size * Vertex.SIZEOF).toLong()
+        val pStagingBuffer = stack.mallocLong(1)
+        val pStagingMemory = stack.mallocLong(1)
+        createBuffer(stack, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, pStagingBuffer, pStagingMemory, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+
+        val data = stack.mallocPointer(1)
+        vkMapMemory(logicalDevice!!, pStagingMemory.get(0), 0, size, 0, data)
+        data.getByteBuffer(0, size.toInt()).apply {
+            for (vertex in vertices) {
+                putFloat(vertex.position.x)
+                putFloat(vertex.position.y)
+                putFloat(vertex.color.x)
+                putFloat(vertex.color.y)
+                putFloat(vertex.color.z)
+            }
+        }
+        vkUnmapMemory(logicalDevice!!, pStagingMemory.get())
+
+        copyBuffer(stack, pStagingBuffer.get(0), vertexBuffer!!, size)
+
+        vkDestroyBuffer(logicalDevice!!, pStagingBuffer.get(0), null)
+        vkFreeMemory(logicalDevice!!, pStagingMemory.get(0), null)
+    }
+    @Suppress("unused")
+    private fun updateVertices(stack: MemoryStack, transform: (Vertex) -> Vertex) {
+        val newVertices = vertices.map(transform)
+        setVertices(stack, newVertices)
+    }
+
+    private fun setIndices(stack: MemoryStack, indices: List<Int>) {
+        this.indices = indices
+        val size = (indices.size * Integer.BYTES).toLong()
+        val pStagingBuffer = stack.mallocLong(1)
+        val pStagingMemory = stack.mallocLong(1)
+        createBuffer(stack, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, pStagingBuffer, pStagingMemory, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+
+        val data = stack.mallocPointer(1)
+        vkMapMemory(logicalDevice!!, pStagingMemory.get(0), 0, size, 0, data)
+        data.getByteBuffer(0, size.toInt()).apply {
+            for (index in indices) {
+                putInt(index)
+            }
+        }
+        vkUnmapMemory(logicalDevice!!, pStagingMemory.get())
+
+        copyBuffer(stack, pStagingBuffer.get(0), indexBuffer!!, size)
+
+        vkDestroyBuffer(logicalDevice!!, pStagingBuffer.get(0), null)
+        vkFreeMemory(logicalDevice!!, pStagingMemory.get(0), null)
+    }
+    @Suppress("unused")
+    private fun updateIndices(stack: MemoryStack, transform: (Int) -> Int) {
+        val newIndices = indices.map(transform)
+        setIndices(stack, newIndices)
+    }
+
     private fun drawFrame() {
         MemoryStack.stackPush().use { stack ->
+            if (showFPS) {
+                if (t % 1000 == 0L) {
+                    val currentTime = System.currentTimeMillis()
+                    val diff = currentTime - time
+                    time = currentTime
+                    val kfps = 1000.0 / diff
+                    println("kFPS: $kfps")
+                    println("FPS: ${kfps * 1000}")
+                }
+            }
             val frame = frames[currentFrame]
             vkWaitForFences(logicalDevice!!, frame.inFlightFence, true, Long.MAX_VALUE)
             vkResetFences(logicalDevice!!, frame.inFlightFence)
@@ -948,6 +984,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
             }
 
             currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT
+            t++
         }
     }
 
