@@ -18,7 +18,9 @@ import java.nio.LongBuffer
 
 abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 
-    private val MAX_FRAMES_IN_FLIGHT = 2
+    companion object {
+        private const val MAX_FRAMES_IN_FLIGHT = 2
+    }
 
     private var window: Long? = null
 
