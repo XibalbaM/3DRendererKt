@@ -99,6 +99,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         glfwSetFramebufferSizeCallback(window!!, this::framebufferResizeCallback)
     }
 
+    @Suppress("UNUSED_PARAMETER")
     private fun framebufferResizeCallback(window: Long, width: Int, height: Int) {
         framebufferResized = true
     }
@@ -735,7 +736,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         }
     }
 
-    private fun findMemoryType(stack: MemoryStack, typeFilter: Int, properties: Int): Int {
+    private fun findMemoryType(stack: MemoryStack, typeFilter: Int, @Suppress("SameParameterValue") properties: Int): Int {
         val memProperties = VkPhysicalDeviceMemoryProperties.calloc(stack)
         vkGetPhysicalDeviceMemoryProperties(physicalDevice!!, memProperties)
         for (i in 0 until memProperties.memoryTypeCount()) {
