@@ -1,4 +1,5 @@
 import fr.xibalba.math.Vec2
+import fr.xibalba.math.Vec3
 import org.lwjgl.PointerBuffer
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.glfw.GLFWVulkan.glfwCreateWindowSurface
@@ -11,10 +12,7 @@ import org.lwjgl.vulkan.*
 import org.lwjgl.vulkan.EXTDebugUtils.*
 import org.lwjgl.vulkan.KHRSurface.*
 import org.lwjgl.vulkan.KHRSwapchain.*
-import utils.loadShader
-import utils.toList
-import utils.stringToPointerBuffer
-import utils.toPointerBuffer
+import utils.*
 import java.nio.IntBuffer
 
 abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
@@ -53,6 +51,14 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
     private var currentFrame = 0
 
     private var framebufferResized = false
+
+    private var vertexBuffer: Long? = null
+    private var vertexBufferMemory: Long? = null
+    private val vertices = listOf(
+        Vertex(Vec2(-1.0f, -1.0f), Vec3(1.0f, 0.0f, 0.0f)),
+        Vertex(Vec2(1.0f, -1.0f), Vec3(0.0f, 1.0f, 0.0f)),
+        Vertex(Vec2(-1.0f, 1.0f), Vec3(0.0f, 0.0f, 1.0f)),
+    )
 
     fun run() {
         try {
@@ -103,6 +109,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         createLogicalDevice()
         createCommandPool()
         createSwapChainObjects()
+        createVertexBuffer()
         createSyncObjects()
     }
 
@@ -537,6 +544,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
 
             val vertexInputInfo = VkPipelineVertexInputStateCreateInfo.calloc(stack)
             vertexInputInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO)
+            vertexInputInfo.pVertexBindingDescriptions(Vertex.getBindingDescription(stack))
+            vertexInputInfo.pVertexAttributeDescriptions(Vertex.getAttributeDescriptions(stack))
 
             val inputAssembly = VkPipelineInputAssemblyStateCreateInfo.calloc(stack)
             inputAssembly.sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO)
@@ -662,6 +671,63 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
             }
             commandBuffers = tCommandBuffers.filterNotNull()
         }
+    }
+
+    private fun createVertexBuffer() {
+        MemoryStack.stackPush().use { stack ->
+            val bufferInfo = VkBufferCreateInfo.calloc(stack)
+            bufferInfo.sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
+            bufferInfo.size((Vertex.SIZEOF * vertices.size).toLong())
+            bufferInfo.usage(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)
+            bufferInfo.sharingMode(VK_SHARING_MODE_EXCLUSIVE)
+
+            val pVertexBuffer = stack.mallocLong(1)
+            if (vkCreateBuffer(logicalDevice!!, bufferInfo, null, pVertexBuffer) != VK_SUCCESS) {
+                throw RuntimeException("Failed to create vertex buffer")
+            }
+            vertexBuffer = pVertexBuffer.get(0)
+
+            val memRequirements = VkMemoryRequirements.calloc(stack)
+            vkGetBufferMemoryRequirements(logicalDevice!!, vertexBuffer!!, memRequirements)
+
+            val allocInfo = VkMemoryAllocateInfo.calloc(stack)
+            allocInfo.sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
+            allocInfo.allocationSize(memRequirements.size())
+            allocInfo.memoryTypeIndex(findMemoryType(stack, memRequirements.memoryTypeBits(), VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+
+            val pVertexBufferMemory = stack.mallocLong(1)
+            if (vkAllocateMemory(logicalDevice!!, allocInfo, null, pVertexBufferMemory) != VK_SUCCESS) {
+                throw RuntimeException("Failed to allocate vertex buffer memory")
+            }
+            vertexBufferMemory = pVertexBufferMemory.get(0)
+
+            vkBindBufferMemory(logicalDevice!!, vertexBuffer!!, vertexBufferMemory!!, 0)
+
+            val data = stack.mallocPointer(1)
+            vkMapMemory(logicalDevice!!, vertexBufferMemory!!, 0, bufferInfo.size(), 0, data)
+            data.getByteBuffer(0, bufferInfo.size().toInt()).apply {
+                for (vertex in vertices) {
+                    putFloat(vertex.position.x)
+                    putFloat(vertex.position.y)
+                    putFloat(vertex.color.x)
+                    putFloat(vertex.color.y)
+                    putFloat(vertex.color.z)
+                }
+            }
+            vkUnmapMemory(logicalDevice!!, vertexBufferMemory!!)
+        }
+    }
+
+    private fun findMemoryType(stack: MemoryStack, typeFilter: Int, properties: Int): Int {
+        val memProperties = VkPhysicalDeviceMemoryProperties.calloc(stack)
+        vkGetPhysicalDeviceMemoryProperties(physicalDevice!!, memProperties)
+        for (i in 0 until memProperties.memoryTypeCount()) {
+            if (typeFilter and (1 shl i) != 0 && (memProperties.memoryTypes(i).propertyFlags() and properties) == properties) {
+                return i
+            }
+        }
+        throw RuntimeException("Failed to find suitable memory type")
+
     }
 
     private fun createSyncObjects() {
@@ -824,6 +890,10 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         scissor.extent(swapChainExtent!!)
         vkCmdSetScissor(commandBuffer, 0, scissor)
 
+        val buffer = stack.longs(vertexBuffer!!)
+        val offsets = stack.longs(0)
+        vkCmdBindVertexBuffers(commandBuffer, 0, buffer, offsets)
+
         vkCmdDraw(commandBuffer, 3, 1, 0, 0)
 
         vkCmdEndRenderPass(commandBuffer)
@@ -836,6 +906,9 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
     private fun pCleanup() {
         try {
             cleanupSwapChain()
+
+            vkDestroyBuffer(logicalDevice!!, vertexBuffer!!, null)
+            vkFreeMemory(logicalDevice!!, vertexBufferMemory!!, null)
 
             for (i in 0 until MAX_FRAMES_IN_FLIGHT) {
                 vkDestroySemaphore(logicalDevice!!, frames[i].imageAvailableSemaphore, null)
