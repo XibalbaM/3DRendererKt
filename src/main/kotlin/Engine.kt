@@ -32,6 +32,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
 
     private var graphicsQueue: VkQueue? = null
     private var presentQueue: VkQueue? = null
+    private var transferQueue: VkQueue? = null
 
     private var swapChain: Long? = null
     private var swapChainImages: List<Long>? = null
@@ -44,7 +45,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
     private var pipelineLayout: Long? = null
     private var graphicsPipeline: Long? = null
 
-    private var commandPool: Long? = null
+    private var graphicCommandPool: Long? = null
+    private var transferCommandPool: Long? = null
     private var commandBuffers: List<VkCommandBuffer>? = null
 
     private var frames = List(MAX_FRAMES_IN_FLIGHT) { Frame() }
@@ -107,7 +109,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         createSurface()
         pickPhysicalDevice()
         createLogicalDevice()
-        createCommandPool()
+        createCommandPools()
         createSwapChainObjects()
         createVertexBuffer()
         createSyncObjects()
@@ -271,6 +273,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
             for (i in 0..<queueFamilies.capacity()) {
                 if (queueFamilies[i].queueFlags() and VK_QUEUE_GRAPHICS_BIT != 0) {
                     indices.graphicsFamily = i
+                } else if (queueFamilies[i].queueFlags() and VK_QUEUE_TRANSFER_BIT != 0) {
+                    indices.transferFamily = i
                 }
                 vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface!!, presentSupport)
                 if (presentSupport.get(0) == VK_TRUE) {
@@ -278,6 +282,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
                 }
                 if (indices.isComplete) break
             }
+            if (indices.transferFamily == null) indices.transferFamily = indices.graphicsFamily
             return indices
         }
     }
@@ -288,7 +293,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         }
         val indices = findQueueFamilies(physicalDevice!!)
         MemoryStack.stackPush().use { stack ->
-            val uniqueQueueFamilies = setOf(indices.graphicsFamily!!, indices.presentFamily!!)
+            val uniqueQueueFamilies = indices.uniques()
             val queuePriority = stack.floats(1.0f)
             val queuesCreateInfos = VkDeviceQueueCreateInfo.calloc(uniqueQueueFamilies.size, stack)
             uniqueQueueFamilies.forEachIndexed { index, family ->
@@ -314,6 +319,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
             logicalDevice = VkDevice(createInfoPtr.get(0), physicalDevice!!, createInfo)
             graphicsQueue = VkQueue(stack.mallocPointer(1).apply { vkGetDeviceQueue(logicalDevice!!, indices.graphicsFamily!!, 0, this) }.get(0), logicalDevice!!)
             presentQueue = VkQueue(stack.mallocPointer(1).apply { vkGetDeviceQueue(logicalDevice!!, indices.presentFamily!!, 0, this) }.get(0), logicalDevice!!)
+            transferQueue = VkQueue(stack.mallocPointer(1).apply { vkGetDeviceQueue(logicalDevice!!, indices.transferFamily!!, 0, this) }.get(0), logicalDevice!!)
         }
     }
 
@@ -350,19 +356,30 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         return details
     }
 
-    private fun createCommandPool() {
+    private fun createCommandPools() {
         MemoryStack.stackPush().use { stack ->
             val queueFamilyIndices = findQueueFamilies(physicalDevice!!)
             val poolInfo = VkCommandPoolCreateInfo.calloc(stack)
             poolInfo.sType(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO)
             poolInfo.flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT)
-            poolInfo.queueFamilyIndex(queueFamilyIndices.graphicsFamily!!)
 
-            val pCommandPool = stack.mallocLong(1)
-            if (vkCreateCommandPool(logicalDevice!!, poolInfo, null, pCommandPool) != VK_SUCCESS) {
+            poolInfo.queueFamilyIndex(queueFamilyIndices.graphicsFamily!!)
+            val pGraphicCommandPool = stack.mallocLong(1)
+            if (vkCreateCommandPool(logicalDevice!!, poolInfo, null, pGraphicCommandPool) != VK_SUCCESS) {
                 throw RuntimeException("Failed to create command pool")
             }
-            commandPool = pCommandPool.get(0)
+            graphicCommandPool = pGraphicCommandPool.get(0)
+
+            if (queueFamilyIndices.graphicsFamily != queueFamilyIndices.transferFamily) {
+                poolInfo.queueFamilyIndex(queueFamilyIndices.transferFamily!!)
+                val pTransferCommandPool = stack.mallocLong(1)
+                if (vkCreateCommandPool(logicalDevice!!, poolInfo, null, pTransferCommandPool) != VK_SUCCESS) {
+                    throw RuntimeException("Failed to create command pool")
+                }
+                transferCommandPool = pTransferCommandPool.get(0)
+            } else {
+                transferCommandPool = graphicCommandPool
+            }
         }
     }
 
@@ -396,9 +413,9 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
             createInfo.imageExtent(extent)
             createInfo.imageArrayLayers(1)
             createInfo.imageUsage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
-            if (indices.graphicsFamily != indices.presentFamily) {
+            if (indices.uniques().size != 1) {
                 createInfo.imageSharingMode(VK_SHARING_MODE_CONCURRENT)
-                createInfo.pQueueFamilyIndices(stack.ints(indices.graphicsFamily!!, indices.presentFamily!!))
+                createInfo.pQueueFamilyIndices(stack.ints(*indices.uniques().toIntArray()))
             } else {
                 createInfo.imageSharingMode(VK_SHARING_MODE_EXCLUSIVE)
             }
@@ -657,7 +674,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         MemoryStack.stackPush().use { stack ->
             val allocInfo = VkCommandBufferAllocateInfo.calloc(stack)
             allocInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO)
-            allocInfo.commandPool(commandPool!!)
+            allocInfo.commandPool(graphicCommandPool!!)
             allocInfo.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
             allocInfo.commandBufferCount(1)
 
@@ -775,7 +792,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
             vkDestroyFramebuffer(logicalDevice!!, it, null)
         }
         MemoryStack.stackPush().use { stack ->
-            vkFreeCommandBuffers(logicalDevice!!, commandPool!!, commandBuffers!!.toPointerBuffer(stack))
+            vkFreeCommandBuffers(logicalDevice!!, graphicCommandPool!!, commandBuffers!!.toPointerBuffer(stack))
         }
         vkDestroyPipeline(logicalDevice!!, graphicsPipeline!!, null)
         vkDestroyPipelineLayout(logicalDevice!!, pipelineLayout!!, null)
@@ -916,7 +933,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
                 vkDestroyFence(logicalDevice!!, frames[i].inFlightFence, null)
             }
 
-            vkDestroyCommandPool(logicalDevice!!, commandPool!!, null)
+            vkDestroyCommandPool(logicalDevice!!, graphicCommandPool!!, null)
 
             vkDestroyDevice(logicalDevice!!, null)
 
@@ -932,8 +949,10 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         }
     }
 
-    class QueueFamilyIndices(var graphicsFamily: Int? = null, var presentFamily: Int? = null) {
+    class QueueFamilyIndices(var graphicsFamily: Int? = null, var presentFamily: Int? = null, var transferFamily: Int? = null) {
         val isComplete get() = graphicsFamily != null && presentFamily != null
+
+        fun uniques() = setOfNotNull(graphicsFamily, presentFamily, transferFamily)
     }
 
     class SwapChainSupportDetails(
