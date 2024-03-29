@@ -729,7 +729,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val logLevel: 
         vkDeviceWaitIdle(logicalDevice!!)
     }
 
-    private fun drawFrame() { //TODO
+    private fun drawFrame() {
         MemoryStack.stackPush().use { stack ->
             val frame = frames[currentFrame]
             vkWaitForFences(logicalDevice!!, frame.inFlightFence, true, Long.MAX_VALUE)
