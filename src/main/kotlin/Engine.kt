@@ -689,7 +689,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             allocInfo.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
             allocInfo.commandBufferCount(1)
 
-            val tCommandBuffers = MutableList<VkCommandBuffer?>(swapChainFramebuffers!!.size) { null }
+            val tCommandBuffers = MutableList<VkCommandBuffer?>(MAX_FRAMES_IN_FLIGHT) { null }
             for (i in 0 until MAX_FRAMES_IN_FLIGHT) {
                 val pCommandBuffers = stack.mallocPointer(1)
                 if (vkAllocateCommandBuffers(logicalDevice!!, allocInfo, pCommandBuffers) != VK_SUCCESS) {
