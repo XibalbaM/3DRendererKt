@@ -931,9 +931,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
                     val currentTime = System.currentTimeMillis()
                     val diff = currentTime - time
                     time = currentTime
-                    val kfps = 1000.0 / diff
-                    println("kFPS: $kfps")
-                    println("FPS: ${kfps * 1000}")
+                    val fps = 1000.0 / diff * 1000
+                    println("FPS: $fps")
                 }
             }
             val frame = frames[currentFrame]
