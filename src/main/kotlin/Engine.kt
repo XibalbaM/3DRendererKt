@@ -75,6 +75,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         try {
             initWindow()
             initVulkan()
+            init()
             pLoop()
         } catch (e: Exception) {
             e.printStackTrace()
@@ -859,8 +860,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
 
     private fun pLoop() {
         while (!glfwWindowShouldClose(window!!)) {
-
             glfwPollEvents()
+            loop()
             drawFrame()
         }
         vkDeviceWaitIdle(logicalDevice!!)
@@ -1045,6 +1046,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
 
     private fun pCleanup() {
         try {
+            cleanup()
+
             cleanupSwapChain()
 
             vkDestroyBuffer(logicalDevice!!, indexBuffer!!, null)
@@ -1073,6 +1076,10 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             glfwTerminate()
         }
     }
+
+    abstract fun init()
+    abstract fun loop()
+    abstract fun cleanup()
 
     class QueueFamilyIndices(var graphicsFamily: Int? = null, var presentFamily: Int? = null, var transferFamily: Int? = null) {
         val isComplete get() = graphicsFamily != null && presentFamily != null
