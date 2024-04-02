@@ -66,9 +66,9 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         Vertex(Vec2(0.5f, 0.5f), Vec3(0.0f, 0.0f, 1.0f)),
         Vertex(Vec2(-0.5f, 0.5f), Vec3(1.0f, 1.0f, 1.0f))
     )
-    private var indices = listOf(0, 1, 2, 2, 3, 0)
+    private var triangles = listOf(vec3(0, 1, 2), vec3(2, 3, 0))
 
-    private var t = 0L
+    private var t = 0
     private var time = System.currentTimeMillis()
 
     fun run() {
@@ -717,7 +717,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
 
     private fun createIndexBuffer() {
         MemoryStack.stackPush().use { stack ->
-            val size = (indices.size * Integer.BYTES).toLong()
+            val size = (triangles.size * 3 * Integer.BYTES).toLong()
 
             val pIndexBuffer = stack.mallocLong(1)
             val pIndexMemory = stack.mallocLong(1)
@@ -725,7 +725,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             indexBuffer = pIndexBuffer.get(0)
             indexBufferMemory = pIndexMemory.get(0)
 
-            setIndices(stack, indices)
+            setTriangles(stack, triangles)
         }
     }
 
@@ -898,9 +898,9 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         setVertices(stack, newVertices)
     }
 
-    private fun setIndices(stack: MemoryStack, indices: List<Int>) {
-        this.indices = indices
-        val size = (indices.size * Integer.BYTES).toLong()
+    private fun setTriangles(stack: MemoryStack, triangles: List<Vec3<Int>>) {
+        this.triangles = triangles
+        val size = (triangles.size * 3 * Integer.BYTES).toLong()
         val pStagingBuffer = stack.mallocLong(1)
         val pStagingMemory = stack.mallocLong(1)
         createBuffer(stack, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, pStagingBuffer, pStagingMemory, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
@@ -908,7 +908,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         val data = stack.mallocPointer(1)
         vkMapMemory(logicalDevice!!, pStagingMemory.get(0), 0, size, 0, data)
         data.getByteBuffer(0, size.toInt()).apply {
-            for (index in indices) {
+            for (index in triangles.flatten()) {
                 putInt(index)
             }
         }
@@ -920,19 +920,19 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         vkFreeMemory(logicalDevice!!, pStagingMemory.get(0), null)
     }
     @Suppress("unused")
-    private fun updateIndices(stack: MemoryStack, transform: (Int) -> Int) {
-        val newIndices = indices.map(transform)
-        setIndices(stack, newIndices)
+    private fun updateTriangles(stack: MemoryStack, transform: (Vec3<Int>) -> Vec3<Int>) {
+        val newTriangles = triangles.map(transform)
+        setTriangles(stack, newTriangles)
     }
 
     private fun drawFrame() {
         MemoryStack.stackPush().use { stack ->
             if (showFPS) {
-                if (t % 1000 == 0L) {
+                if (t % 1000 == 0) {
                     val currentTime = System.currentTimeMillis()
                     val diff = currentTime - time
                     time = currentTime
-                    val fps = 1000.0 / diff * 1000
+                    val fps = 1000000.0 / diff
                     println("FPS: $fps")
                 }
             }
@@ -1035,7 +1035,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         vkCmdBindVertexBuffers(commandBuffer, 0, buffer, offsets)
         vkCmdBindIndexBuffer(commandBuffer, indexBuffer!!, 0, VK_INDEX_TYPE_UINT32)
 
-        vkCmdDrawIndexed(commandBuffer, indices.size, 1, 0, 0, 0)
+        vkCmdDrawIndexed(commandBuffer, triangles.size * 3, 1, 0, 0, 0)
 
         vkCmdEndRenderPass(commandBuffer)
 
