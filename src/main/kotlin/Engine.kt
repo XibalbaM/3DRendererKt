@@ -44,6 +44,9 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
     private var swapChainFramebuffers: List<Long>? = null
 
     private var renderPass: Long? = null
+    private var descriptorSetLayout: Long? = null
+    private var descriptorPool: Long? = null
+    private var descriptorSets: List<Long>? = null
     private var pipelineLayout: Long? = null
     private var graphicsPipeline: Long? = null
 
@@ -68,8 +71,9 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
     )
     private var triangles = listOf(vec3(0, 1, 2), vec3(2, 3, 0))
 
-    private var t = 0
-    private var time = System.currentTimeMillis()
+    private var uniformBuffers: List<Long>? = null
+    private var uniformBuffersMemory: List<Long>? = null
+    private var uniformBuffersMapped: Pair<MemoryStack, List<PointerBuffer>>? = null
 
     fun run() {
         try {
@@ -399,8 +403,12 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         createSwapChain()
         createImageViews()
         createRenderPass()
+        createDescriptorSetLayout()
         createGraphicsPipeline()
         createFramebuffers()
+        createUniformBuffers()
+        createDescriptorPool()
+        createDescriptorSets()
         createCommandBuffers()
     }
 
@@ -551,6 +559,26 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         }
     }
 
+    private fun createDescriptorSetLayout() {
+        MemoryStack.stackPush().use { stack ->
+            val uboLayoutBinding = VkDescriptorSetLayoutBinding.calloc(1, stack)
+            uboLayoutBinding.binding(0)
+            uboLayoutBinding.descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+            uboLayoutBinding.descriptorCount(1)
+            uboLayoutBinding.stageFlags(VK_SHADER_STAGE_VERTEX_BIT)
+
+            val layoutInfo = VkDescriptorSetLayoutCreateInfo.calloc(stack)
+            layoutInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)
+            layoutInfo.pBindings(uboLayoutBinding)
+
+            val pDescriptorSetLayout = stack.mallocLong(1)
+            if (vkCreateDescriptorSetLayout(logicalDevice!!, layoutInfo, null, pDescriptorSetLayout) != VK_SUCCESS) {
+                throw RuntimeException("Failed to create descriptor set layout")
+            }
+            descriptorSetLayout = pDescriptorSetLayout.get(0)
+        }
+    }
+
     private fun createGraphicsPipeline() {
         MemoryStack.stackPush().use { stack ->
             val vertShaderModule = createShaderModule(stack, loadShader("vert.spv"))
@@ -597,7 +625,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             rasterizer.polygonMode(VK_POLYGON_MODE_FILL)
             rasterizer.lineWidth(1.0f)
             rasterizer.cullMode(VK_CULL_MODE_BACK_BIT)
-            rasterizer.frontFace(VK_FRONT_FACE_CLOCKWISE)
+            rasterizer.frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE)
             rasterizer.depthBiasEnable(false)
 
             val multisampling = VkPipelineMultisampleStateCreateInfo.calloc(stack)
@@ -617,6 +645,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
 
             val pipelineLayoutInfo = VkPipelineLayoutCreateInfo.calloc(stack)
             pipelineLayoutInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
+            pipelineLayoutInfo.pSetLayouts(stack.longs(descriptorSetLayout!!))
 
             val pPipelineLayout = stack.mallocLong(1)
             if (vkCreatePipelineLayout(logicalDevice!!, pipelineLayoutInfo, null, pPipelineLayout) != VK_SUCCESS) {
@@ -726,6 +755,79 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             indexBufferMemory = pIndexMemory.get(0)
 
             setTriangles(stack, triangles)
+        }
+    }
+
+    private fun createUniformBuffers() {
+        val stack = MemoryStack.stackPush()
+        val bufferSize = UniformBufferObject.SIZEOF.toLong()
+        val pUniformBuffers = mutableListOf<Long>()
+        val pUniformBuffersMemory = mutableListOf<Long>()
+        val tUniformBuffersMapped = stack to MutableList(MAX_FRAMES_IN_FLIGHT) { stack.mallocPointer(1) }
+        for (i in 0 until MAX_FRAMES_IN_FLIGHT) {
+            val pUniformBuffer = stack.mallocLong(1)
+            val pUniformBufferMemory = stack.mallocLong(1)
+            createBuffer(stack, bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, pUniformBuffer, pUniformBufferMemory, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+            pUniformBuffers.add(pUniformBuffer.get(0))
+            pUniformBuffersMemory.add(pUniformBufferMemory.get(0))
+
+            vkMapMemory(logicalDevice!!, pUniformBufferMemory.get(0), 0, bufferSize, 0, tUniformBuffersMapped.second[i])
+        }
+        uniformBuffers = pUniformBuffers
+        uniformBuffersMemory = pUniformBuffersMemory
+        uniformBuffersMapped = tUniformBuffersMapped
+    }
+
+    private fun createDescriptorPool() {
+        MemoryStack.stackPush().use { stack ->
+            val poolSizes = VkDescriptorPoolSize.calloc(1, stack)
+            poolSizes.type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+            poolSizes.descriptorCount(MAX_FRAMES_IN_FLIGHT)
+
+            val poolInfo = VkDescriptorPoolCreateInfo.calloc(stack)
+            poolInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO)
+            poolInfo.pPoolSizes(poolSizes)
+            poolInfo.maxSets(MAX_FRAMES_IN_FLIGHT)
+
+            val pDescriptorPool = stack.mallocLong(1)
+            if (vkCreateDescriptorPool(logicalDevice!!, poolInfo, null, pDescriptorPool) != VK_SUCCESS) {
+                throw RuntimeException("Failed to create descriptor pool")
+            }
+            descriptorPool = pDescriptorPool.get(0)
+        }
+    }
+
+    private fun createDescriptorSets() {
+        val layouts = MutableList(MAX_FRAMES_IN_FLIGHT) { descriptorSetLayout!! }
+        MemoryStack.stackPush().use { stack ->
+            val allocInfo = VkDescriptorSetAllocateInfo.calloc(stack)
+            allocInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO)
+            allocInfo.descriptorPool(descriptorPool!!)
+            allocInfo.pSetLayouts(stack.longs(*layouts.toLongArray()))
+
+            val pDescriptorSets = stack.mallocLong(MAX_FRAMES_IN_FLIGHT)
+            if (vkAllocateDescriptorSets(logicalDevice!!, allocInfo, pDescriptorSets) != VK_SUCCESS) {
+                throw RuntimeException("Failed to allocate descriptor sets")
+            }
+            descriptorSets = pDescriptorSets.toList()
+
+            for (i in 0 until MAX_FRAMES_IN_FLIGHT) {
+                val bufferInfo = VkDescriptorBufferInfo.calloc(1, stack)
+                bufferInfo.buffer(uniformBuffers!![i])
+                bufferInfo.offset(0)
+                bufferInfo.range(UniformBufferObject.SIZEOF.toLong())
+
+                val descriptorWrite = VkWriteDescriptorSet.calloc(1, stack)
+                descriptorWrite.sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+                descriptorWrite.dstSet(descriptorSets!![i])
+                descriptorWrite.dstBinding(0)
+                descriptorWrite.dstArrayElement(0)
+                descriptorWrite.descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                descriptorWrite.pBufferInfo(bufferInfo)
+                descriptorWrite.descriptorCount(1)
+
+                vkUpdateDescriptorSets(logicalDevice!!, descriptorWrite, null)
+            }
         }
     }
 
@@ -849,6 +951,13 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         MemoryStack.stackPush().use { stack ->
             vkFreeCommandBuffers(logicalDevice!!, graphicCommandPool!!, commandBuffers!!.toPointerBuffer(stack))
         }
+        uniformBuffers!!.forEachIndexed { i, buffer ->
+            vkDestroyBuffer(logicalDevice!!, buffer, null)
+            vkFreeMemory(logicalDevice!!, uniformBuffersMemory!![i], null)
+        }
+        uniformBuffersMapped!!.first.close()
+        vkDestroyDescriptorPool(logicalDevice!!, descriptorPool!!, null)
+        vkDestroyDescriptorSetLayout(logicalDevice!!, descriptorSetLayout!!, null)
         vkDestroyPipeline(logicalDevice!!, graphicsPipeline!!, null)
         vkDestroyPipelineLayout(logicalDevice!!, pipelineLayout!!, null)
         vkDestroyRenderPass(logicalDevice!!, renderPass!!, null)
@@ -927,15 +1036,6 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
 
     private fun drawFrame() {
         MemoryStack.stackPush().use { stack ->
-            if (showFPS) {
-                if (t % 1000 == 0) {
-                    val currentTime = System.currentTimeMillis()
-                    val diff = currentTime - time
-                    time = currentTime
-                    val fps = 1000000.0 / diff
-                    println("FPS: $fps")
-                }
-            }
             val frame = frames[currentFrame]
             vkWaitForFences(logicalDevice!!, frame.inFlightFence, true, Long.MAX_VALUE)
             vkResetFences(logicalDevice!!, frame.inFlightFence)
@@ -950,6 +1050,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             vkResetCommandBuffer(commandBuffers!![currentFrame], 0)
 
             recordCommandBuffer(stack, commandBuffers!![currentFrame], imageIndex)
+
+            updateUniformBuffer()
 
             val submitInfo = VkSubmitInfo.calloc(stack)
             submitInfo.sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
@@ -984,7 +1086,28 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             }
 
             currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT
-            t++
+        }
+    }
+
+    private val startTime = System.currentTimeMillis()
+    private fun updateUniformBuffer() {
+        val currentTime = System.currentTimeMillis()
+        val deltaTime = (currentTime - startTime) / 1000.0f
+
+        val model = rotate(deltaTime * pi / 2, vec3(0f, 0f, 1f))
+        val view = lookAt(vec3(2f, 2f, 2f), vec3(0f, 0f, 0f), vec3(0f, 0f, 1f))
+        val tempProj = perspective(pi/4, swapChainExtent!!.width().toFloat() / swapChainExtent!!.height().toFloat(), 0.1f, 10f)
+        val rows: List<MutableList<Float>> = tempProj.rows.map { it.toMutableList() }
+        rows[1][1] = -rows[1][1]
+        val proj = SquareMatrix(rows)
+
+        val ubo = UniformBufferObject(model, view, proj)
+        val size = UniformBufferObject.SIZEOF.toLong()
+
+        uniformBuffersMapped!!.second[currentFrame].getByteBuffer(0, size.toInt()).apply {
+            ubo.model.rows.flatten().forEach { putFloat(it) }
+            ubo.view.rows.flatten().forEach { putFloat(it) }
+            ubo.proj.rows.flatten().forEach { putFloat(it) }
         }
     }
 
@@ -1034,6 +1157,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         val offsets = stack.longs(0)
         vkCmdBindVertexBuffers(commandBuffer, 0, buffer, offsets)
         vkCmdBindIndexBuffer(commandBuffer, indexBuffer!!, 0, VK_INDEX_TYPE_UINT32)
+
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout!!, 0, stack.longs(descriptorSets!![currentFrame]), null)
 
         vkCmdDrawIndexed(commandBuffer, triangles.size * 3, 1, 0, 0, 0)
 
@@ -1094,4 +1219,14 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
     )
 
     class Frame(var imageAvailableSemaphore: Long = -1, var renderFinishedSemaphore: Long = -1, var inFlightFence: Long = -1)
+
+    class UniformBufferObject(
+        var model: SquareMatrix<Float>,
+        var view: SquareMatrix<Float>,
+        var proj: SquareMatrix<Float>,
+    ) {
+        companion object {
+            const val SIZEOF = 3 * 4 * 4 * Float.SIZE_BYTES
+        }
+    }
 }
