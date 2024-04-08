@@ -3,18 +3,18 @@ import org.lwjgl.PointerBuffer
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.glfw.GLFWVulkan.glfwCreateWindowSurface
 import org.lwjgl.glfw.GLFWVulkan.glfwGetRequiredInstanceExtensions
+import org.lwjgl.system.Configuration.DEBUG
 import org.lwjgl.system.MemoryStack
 import org.lwjgl.system.MemoryUtil.NULL
-import org.lwjgl.vulkan.VK10.*
-import org.lwjgl.system.Configuration.DEBUG
 import org.lwjgl.vulkan.*
 import org.lwjgl.vulkan.EXTDebugUtils.*
 import org.lwjgl.vulkan.KHRSurface.*
 import org.lwjgl.vulkan.KHRSwapchain.*
+import org.lwjgl.vulkan.VK10.*
 import utils.*
-import java.awt.image.BufferedImage
 import java.nio.IntBuffer
 import java.nio.LongBuffer
+
 
 abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = false, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 
@@ -65,21 +65,32 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
     private var indexBuffer: Long? = null
     private var indexBufferMemory: Long? = null
     private var vertices = listOf(
-        Vertex(Vec2(-0.5f, -0.5f), Vec3(1.0f, 0.0f, 0.0f), Vec2(1.0f, 0.0f)),
-        Vertex(Vec2(0.5f, -0.5f), Vec3(0.0f, 1.0f, 0.0f), Vec2(0.0f, 0.0f)),
-        Vertex(Vec2(0.5f, 0.5f), Vec3(0.0f, 0.0f, 1.0f), Vec2(0.0f, 1.0f)),
-        Vertex(Vec2(-0.5f, 0.5f), Vec3(1.0f, 1.0f, 1.0f), Vec2(1.0f, 1.0f))
+        Vertex(Vec3(-0.5f, -0.5f, 0.0f), Vec3(1.0f, 0.0f, 0.0f), Vec2(1.0f, 0.0f)),
+        Vertex(Vec3(0.5f, -0.5f, 0.0f), Vec3(0.0f, 1.0f, 0.0f), Vec2(0.0f, 0.0f)),
+        Vertex(Vec3(0.5f, 0.5f, 0.0f), Vec3(0.0f, 0.0f, 1.0f), Vec2(0.0f, 1.0f)),
+        Vertex(Vec3(-0.5f, 0.5f, 0.0f), Vec3(1.0f, 1.0f, 1.0f), Vec2(1.0f, 1.0f)),
+
+        Vertex(Vec3(-0.5f, -0.5f, -0.5f), Vec3(1.0f, 0.0f, 0.0f), Vec2(1.0f, 0.0f)),
+        Vertex(Vec3(0.5f, -0.5f, -0.5f), Vec3(0.0f, 1.0f, 0.0f), Vec2(0.0f, 0.0f)),
+        Vertex(Vec3(0.5f, 0.5f, -0.5f), Vec3(0.0f, 0.0f, 1.0f), Vec2(0.0f, 1.0f)),
+        Vertex(Vec3(-0.5f, 0.5f, -0.5f), Vec3(1.0f, 1.0f, 1.0f), Vec2(1.0f, 1.0f))
     )
-    private var triangles = listOf(vec3(0, 1, 2), vec3(2, 3, 0))
+    private var triangles = listOf(
+        vec3(0, 1, 2), vec3(2, 3, 0),
+        vec3(4, 5, 6), vec3(6, 7, 4)
+    )
 
     private var uniformBuffers: List<Long>? = null
     private var uniformBuffersMemory: List<Long>? = null
-    private var uniformBuffersMapped: Pair<MemoryStack, List<PointerBuffer>>? = null
 
     private var textureImage: Long? = null
     private var textureImageMemory: Long? = null
     private var textureImageView: Long? = null
     private var textureSampler: Long? = null
+
+    private var depthImage: Long? = null
+    private var depthImageMemory: Long? = null
+    private var depthImageView: Long? = null
 
     fun run() {
         try {
@@ -410,6 +421,41 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         }
     }
 
+    private fun createDepthResources() {
+        MemoryStack.stackPush().use { stack ->
+            val depthFormat = findDepthFormat(stack)
+            val pDepthImage = stack.mallocLong(1)
+            val pDepthImageMemory = stack.mallocLong(1)
+            createImage(stack, swapChainExtent!!.width(), swapChainExtent!!.height(), depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, pDepthImage, pDepthImageMemory)
+            depthImage = pDepthImage.get(0)
+            depthImageMemory = pDepthImageMemory.get(0)
+            depthImageView = createImageView(stack, depthImage!!, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT)
+
+            transitionImageLayout(stack, depthImage!!, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+        }
+    }
+
+    private fun findSupportedFormat(stack: MemoryStack, candidates: List<Int>, tiling: Int, features: Int): Int {
+        for (format in candidates) {
+            val props = VkFormatProperties.calloc(stack)
+            vkGetPhysicalDeviceFormatProperties(physicalDevice!!, format, props)
+            if (tiling == VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures() and features) == features) {
+                return format
+            } else if (tiling == VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures() and features) == features) {
+                return format
+            }
+        }
+        throw RuntimeException("Failed to find supported format")
+    }
+
+    private fun findDepthFormat(stack: MemoryStack): Int {
+        return findSupportedFormat(stack, listOf(VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT), VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
+    }
+
+    private fun hasStencilComponent(format: Int): Boolean {
+        return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT
+    }
+
     private fun createTextureImage() {
         MemoryStack.stackPush().use { stack ->
             val image = loadImage("test.jpg")
@@ -435,26 +481,26 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
 
             val pTextureImage = stack.mallocLong(1)
             val pTextureImageMemory = stack.mallocLong(1)
-            createImage(stack, image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT or VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, pTextureImage, pTextureImageMemory)
+            createImage(stack, image.width, image.height, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT or VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, pTextureImage, pTextureImageMemory)
             textureImage = pTextureImage.get(0)
             textureImageMemory = pTextureImageMemory.get(0)
 
-            transitionImageLayout(stack, textureImage!!, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+            transitionImageLayout(stack, textureImage!!, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
             copyBufferToImage(stack, stagingBuffer.get(0), textureImage!!, image.width, image.height)
-            transitionImageLayout(stack, textureImage!!, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            transitionImageLayout(stack, textureImage!!, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
 
             vkDestroyBuffer(logicalDevice!!, stagingBuffer.get(0), null)
             vkFreeMemory(logicalDevice!!, stagingBufferMemory.get(0), null)
         }
     }
 
-    private fun createImage(stack: MemoryStack, image: BufferedImage, format: Int, tiling: Int, usage: Int, properties: Int, pImage: LongBuffer, pImageMemory: LongBuffer) {
+    private fun createImage(stack: MemoryStack, width: Int, height: Int, format: Int, tiling: Int, usage: Int, properties: Int, pImage: LongBuffer, pImageMemory: LongBuffer) {
         val imageInfo = VkImageCreateInfo.calloc(stack)
         imageInfo.sType(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO)
         imageInfo.imageType(VK_IMAGE_TYPE_2D)
         imageInfo.extent {
-            it.width(image.width)
-            it.height(image.height)
+            it.width(width)
+            it.height(height)
             it.depth(1)
         }
         imageInfo.mipLevels(1)
@@ -485,7 +531,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         vkBindImageMemory(logicalDevice!!, pImage.get(0), pImageMemory.get(0), 0)
     }
 
-    private fun transitionImageLayout(stack: MemoryStack, image: Long, oldLayout: Int, newLayout: Int) {
+    private fun transitionImageLayout(stack: MemoryStack, image: Long, format: Int, oldLayout: Int, newLayout: Int) {
         val commandBuffer = beginSingleTimeCommands(stack)
 
         val barrier = VkImageMemoryBarrier.calloc(1, stack)
@@ -496,11 +542,19 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         barrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
         barrier.image(image)
         barrier.subresourceRange {
-            it.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
             it.baseMipLevel(0)
             it.levelCount(1)
             it.baseArrayLayer(0)
             it.layerCount(1)
+
+            if (newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+                it.aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT)
+                if (hasStencilComponent(format)) {
+                    it.aspectMask(it.aspectMask() or VK_IMAGE_ASPECT_STENCIL_BIT)
+                }
+            } else {
+                it.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+            }
         }
 
         val srcStage: Int
@@ -515,6 +569,11 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             barrier.dstAccessMask(VK_ACCESS_SHADER_READ_BIT)
             srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT
             dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+        } else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+            barrier.srcAccessMask(0)
+            barrier.dstAccessMask(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT or VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
+            srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+            dstStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
         } else {
             throw IllegalArgumentException("Unsupported layout transition")
         }
@@ -547,7 +606,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
 
     private fun createTextureImageView() {
         MemoryStack.stackPush().use { stack ->
-            textureImageView = createImageView(stack, textureImage!!, VK_FORMAT_R8G8B8A8_SRGB)
+            textureImageView = createImageView(stack, textureImage!!, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT)
         }
     }
 
@@ -582,14 +641,14 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         }
     }
 
-    private fun createImageView(stack: MemoryStack, image: Long, format: Int) : Long {
+    private fun createImageView(stack: MemoryStack, image: Long, format: Int, aspectFlags: Int) : Long {
         val viewInfo = VkImageViewCreateInfo.calloc(stack)
         viewInfo.sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
         viewInfo.image(image)
         viewInfo.viewType(VK_IMAGE_VIEW_TYPE_2D)
         viewInfo.format(format)
         viewInfo.subresourceRange {
-            it.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+            it.aspectMask(aspectFlags)
             it.baseMipLevel(0)
             it.levelCount(1)
             it.baseArrayLayer(0)
@@ -609,6 +668,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         createRenderPass()
         createDescriptorSetLayout()
         createGraphicsPipeline()
+        createDepthResources()
         createFramebuffers()
         createUniformBuffers()
         createDescriptorPool()
@@ -693,14 +753,14 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
     private fun createImageViews() {
         MemoryStack.stackPush().use { stack ->
             swapChainImageViews = swapChainImages!!.map { image ->
-                createImageView(stack, image, swapChainImageFormat!!)
+                createImageView(stack, image, swapChainImageFormat!!, VK_IMAGE_ASPECT_COLOR_BIT)
             }
         }
     }
 
     private fun createRenderPass() {
         MemoryStack.stackPush().use { stack ->
-            val colorAttachment = VkAttachmentDescription.calloc(1, stack)
+            val colorAttachment = VkAttachmentDescription.calloc(stack)
             colorAttachment.format(swapChainImageFormat!!)
             colorAttachment.samples(VK_SAMPLE_COUNT_1_BIT)
             colorAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
@@ -714,22 +774,40 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             colorAttachmentRef.attachment(0)
             colorAttachmentRef.layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
 
+            val depthAttachment = VkAttachmentDescription.calloc(stack)
+            depthAttachment.format(findDepthFormat(stack))
+            depthAttachment.samples(VK_SAMPLE_COUNT_1_BIT)
+            depthAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR)
+            depthAttachment.storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+            depthAttachment.stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+            depthAttachment.stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
+            depthAttachment.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
+            depthAttachment.finalLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+
+            val depthAttachmentRef = VkAttachmentReference.calloc(stack)
+            depthAttachmentRef.attachment(1)
+            depthAttachmentRef.layout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+
+            val attachments = VkAttachmentDescription.calloc(2, stack)
+            attachments.put(colorAttachment).put(depthAttachment).flip()
+
             val subpass = VkSubpassDescription.calloc(1, stack)
             subpass.pipelineBindPoint(VK_PIPELINE_BIND_POINT_GRAPHICS)
             subpass.colorAttachmentCount(1)
-            subpass.pColorAttachments(VkAttachmentReference.calloc(1, stack).put(colorAttachmentRef).flip())
+            subpass.pColorAttachments(colorAttachmentRef)
+            subpass.pDepthStencilAttachment(depthAttachmentRef)
 
             val dependency = VkSubpassDependency.calloc(1, stack)
             dependency.srcSubpass(VK_SUBPASS_EXTERNAL)
             dependency.dstSubpass(0)
-            dependency.srcStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
+            dependency.srcStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT or VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT)
             dependency.srcAccessMask(0)
-            dependency.dstStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
-            dependency.dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
+            dependency.dstStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT or VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT)
+            dependency.dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT or VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
 
             val renderPassInfo = VkRenderPassCreateInfo.calloc(stack)
             renderPassInfo.sType(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO)
-            renderPassInfo.pAttachments(colorAttachment)
+            renderPassInfo.pAttachments(attachments)
             renderPassInfo.pSubpasses(subpass)
             renderPassInfo.pDependencies(dependency)
 
@@ -834,6 +912,14 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             colorBlending.logicOp(VK_LOGIC_OP_COPY)
             colorBlending.pAttachments(VkPipelineColorBlendAttachmentState.calloc(1, stack).put(colorBlendAttachment).flip())
 
+            val depthStencil = VkPipelineDepthStencilStateCreateInfo.calloc(stack)
+            depthStencil.sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO)
+            depthStencil.depthTestEnable(true)
+            depthStencil.depthWriteEnable(true)
+            depthStencil.depthCompareOp(VK_COMPARE_OP_LESS)
+            depthStencil.depthBoundsTestEnable(false)
+            depthStencil.stencilTestEnable(false)
+
             val pipelineLayoutInfo = VkPipelineLayoutCreateInfo.calloc(stack)
             pipelineLayoutInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO)
             pipelineLayoutInfo.pSetLayouts(stack.longs(descriptorSetLayout!!))
@@ -859,6 +945,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             pipelineInfo.subpass(0)
             pipelineInfo.basePipelineHandle(VK_NULL_HANDLE)
             pipelineInfo.basePipelineIndex(-1)
+            pipelineInfo.pDepthStencilState(depthStencil)
 
             val pGraphicsPipeline = stack.mallocLong(1)
             if (vkCreateGraphicsPipelines(logicalDevice!!, VK_NULL_HANDLE, pipelineInfo, null, pGraphicsPipeline) != VK_SUCCESS) {
@@ -885,7 +972,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
     private fun createFramebuffers() {
         MemoryStack.stackPush().use { stack ->
             swapChainFramebuffers = swapChainImageViews!!.map {
-                val attachments = stack.longs(it)
+                val attachments = stack.longs(it, depthImageView!!)
                 val framebufferInfo = VkFramebufferCreateInfo.calloc(stack)
                 framebufferInfo.sType(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO)
                 framebufferInfo.renderPass(renderPass!!)
@@ -950,23 +1037,27 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
     }
 
     private fun createUniformBuffers() {
-        val stack = MemoryStack.stackPush()
-        val bufferSize = UniformBufferObject.SIZEOF.toLong()
-        val pUniformBuffers = mutableListOf<Long>()
-        val pUniformBuffersMemory = mutableListOf<Long>()
-        val tUniformBuffersMapped = stack to MutableList(MAX_FRAMES_IN_FLIGHT) { stack.mallocPointer(1) }
-        for (i in 0 until MAX_FRAMES_IN_FLIGHT) {
-            val pUniformBuffer = stack.mallocLong(1)
-            val pUniformBufferMemory = stack.mallocLong(1)
-            createBuffer(stack, bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, pUniformBuffer, pUniformBufferMemory, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
-            pUniformBuffers.add(pUniformBuffer.get(0))
-            pUniformBuffersMemory.add(pUniformBufferMemory.get(0))
-
-            vkMapMemory(logicalDevice!!, pUniformBufferMemory.get(0), 0, bufferSize, 0, tUniformBuffersMapped.second[i])
+        MemoryStack.stackPush().use { stack ->
+            val bufferSize = UniformBufferObject.SIZEOF.toLong()
+            val pUniformBuffers = mutableListOf<Long>()
+            val pUniformBuffersMemory = mutableListOf<Long>()
+            for (i in 0 until MAX_FRAMES_IN_FLIGHT) {
+                val pUniformBuffer = stack.mallocLong(1)
+                val pUniformBufferMemory = stack.mallocLong(1)
+                createBuffer(
+                    stack,
+                    bufferSize,
+                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    pUniformBuffer,
+                    pUniformBufferMemory,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+                )
+                pUniformBuffers.add(pUniformBuffer.get(0))
+                pUniformBuffersMemory.add(pUniformBufferMemory.get(0))
+            }
+            uniformBuffers = pUniformBuffers
+            uniformBuffersMemory = pUniformBuffersMemory
         }
-        uniformBuffers = pUniformBuffers
-        uniformBuffersMemory = pUniformBuffersMemory
-        uniformBuffersMapped = tUniformBuffersMapped
     }
 
     private fun createDescriptorPool() {
@@ -1170,6 +1261,10 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
     }
 
     private fun cleanupSwapChain() {
+        vkDestroyImageView(logicalDevice!!, depthImageView!!, null)
+        vkDestroyImage(logicalDevice!!, depthImage!!, null)
+        vkFreeMemory(logicalDevice!!, depthImageMemory!!, null)
+
         swapChainFramebuffers!!.forEach {
             vkDestroyFramebuffer(logicalDevice!!, it, null)
         }
@@ -1180,7 +1275,6 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             vkDestroyBuffer(logicalDevice!!, buffer, null)
             vkFreeMemory(logicalDevice!!, uniformBuffersMemory!![i], null)
         }
-        uniformBuffersMapped!!.first.close()
         vkDestroyDescriptorPool(logicalDevice!!, descriptorPool!!, null)
         vkDestroyDescriptorSetLayout(logicalDevice!!, descriptorSetLayout!!, null)
         vkDestroyPipeline(logicalDevice!!, graphicsPipeline!!, null)
@@ -1214,6 +1308,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             for (vertex in vertices) {
                 putFloat(vertex.position.x)
                 putFloat(vertex.position.y)
+                putFloat(vertex.position.z)
                 putFloat(vertex.color.x)
                 putFloat(vertex.color.y)
                 putFloat(vertex.color.z)
@@ -1318,23 +1413,27 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
 
     private val startTime = System.currentTimeMillis()
     private fun updateUniformBuffer() {
-        val currentTime = System.currentTimeMillis()
-        val deltaTime = (currentTime - startTime) / 1000.0f
+        MemoryStack.stackPush().use { stack ->
+            val currentTime = System.currentTimeMillis()
+            val deltaTime = (currentTime - startTime) / 1000.0f
 
-        val model = rotate(deltaTime * pi / 2, vec3(0f, 0f, 1f))
-        val view = lookAt(vec3(2f, 2f, 2f), vec3(0f, 0f, 0f), vec3(0f, 0f, 1f))
-        val tempProj = perspective(pi/4, swapChainExtent!!.width().toFloat() / swapChainExtent!!.height().toFloat(), 0.1f, 10f)
-        val rows: List<MutableList<Float>> = tempProj.rows.map { it.toMutableList() }
-        rows[1][1] = -rows[1][1]
-        val proj = SquareMatrix(rows)
+            val model = rotate(deltaTime * pi / 2, vec3(0f, 0f, 1f))
+            val view = lookAt(vec3(2f, 2f, 2f), vec3(0f, 0f, 0f), vec3(0f, 0f, 1f))
+            val tempProj = perspective(pi / 4, swapChainExtent!!.width().toFloat() / swapChainExtent!!.height().toFloat(), 0.1f, 10f)
+            val rows: List<MutableList<Float>> = tempProj.rows.map { it.toMutableList() }
+            rows[1][1] = -rows[1][1]
+            val proj = SquareMatrix(rows)
 
-        val ubo = UniformBufferObject(model, view, proj)
-        val size = UniformBufferObject.SIZEOF.toLong()
-
-        uniformBuffersMapped!!.second[currentFrame].getByteBuffer(0, size.toInt()).apply {
-            ubo.model.rows.flatten().forEach { putFloat(it) }
-            ubo.view.rows.flatten().forEach { putFloat(it) }
-            ubo.proj.rows.flatten().forEach { putFloat(it) }
+            val ubo = UniformBufferObject(model, view, proj)
+            val size = UniformBufferObject.SIZEOF.toLong()
+            val data = stack.mallocPointer(1)
+            vkMapMemory(logicalDevice!!, uniformBuffersMemory!![currentFrame], 0, size, 0, data)
+            data.getByteBuffer(0, size.toInt()).apply {
+                ubo.model.rows.flatten().forEach { putFloat(it) }
+                ubo.view.rows.flatten().forEach { putFloat(it) }
+                ubo.proj.rows.flatten().forEach { putFloat(it) }
+            }
+            vkUnmapMemory(logicalDevice!!, uniformBuffersMemory!![currentFrame])
         }
     }
 
@@ -1354,13 +1453,14 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             it.offset { offset -> offset.set(0, 0) }
             it.extent(swapChainExtent!!)
         }
-        val clearColor = VkClearValue.calloc(1, stack)
-        clearColor.color().float32(0, 0.0f)
-        clearColor.color().float32(1, 0.0f)
-        clearColor.color().float32(2, 0.0f)
-        clearColor.color().float32(3, 1.0f)
-        renderPassInfo.pClearValues(clearColor)
-        renderPassInfo.clearValueCount(1)
+        val clearValues = VkClearValue.calloc(2, stack)
+        clearValues[0].color().float32(0, 0.0f)
+        clearValues[0].color().float32(1, 0.0f)
+        clearValues[0].color().float32(2, 0.0f)
+        clearValues[0].color().float32(3, 1.0f)
+        clearValues[1].depthStencil().depth(1.0f)
+        renderPassInfo.pClearValues(clearValues)
+        renderPassInfo.clearValueCount(clearValues.capacity())
 
         vkCmdBeginRenderPass(commandBuffer, renderPassInfo, VK_SUBPASS_CONTENTS_INLINE)
 
