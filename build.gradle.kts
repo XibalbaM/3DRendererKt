@@ -32,6 +32,7 @@ kotlin {
 tasks.register("compileVertShader") {
     group = "build"
     description = "Compile vert shader"
+
     exec {
         commandLine("glslc", "./src/main/resources/shaders/shader.vert", "-o", "./src/main/resources/shaders/vert.spv")
     }

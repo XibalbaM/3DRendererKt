@@ -12,6 +12,7 @@ import org.lwjgl.vulkan.EXTDebugUtils.*
 import org.lwjgl.vulkan.KHRSurface.*
 import org.lwjgl.vulkan.KHRSwapchain.*
 import utils.*
+import java.awt.image.BufferedImage
 import java.nio.IntBuffer
 import java.nio.LongBuffer
 
@@ -64,16 +65,21 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
     private var indexBuffer: Long? = null
     private var indexBufferMemory: Long? = null
     private var vertices = listOf(
-        Vertex(Vec2(-0.5f, -0.5f), Vec3(1.0f, 0.0f, 0.0f)),
-        Vertex(Vec2(0.5f, -0.5f), Vec3(0.0f, 1.0f, 0.0f)),
-        Vertex(Vec2(0.5f, 0.5f), Vec3(0.0f, 0.0f, 1.0f)),
-        Vertex(Vec2(-0.5f, 0.5f), Vec3(1.0f, 1.0f, 1.0f))
+        Vertex(Vec2(-0.5f, -0.5f), Vec3(1.0f, 0.0f, 0.0f), Vec2(1.0f, 0.0f)),
+        Vertex(Vec2(0.5f, -0.5f), Vec3(0.0f, 1.0f, 0.0f), Vec2(0.0f, 0.0f)),
+        Vertex(Vec2(0.5f, 0.5f), Vec3(0.0f, 0.0f, 1.0f), Vec2(0.0f, 1.0f)),
+        Vertex(Vec2(-0.5f, 0.5f), Vec3(1.0f, 1.0f, 1.0f), Vec2(1.0f, 1.0f))
     )
     private var triangles = listOf(vec3(0, 1, 2), vec3(2, 3, 0))
 
     private var uniformBuffers: List<Long>? = null
     private var uniformBuffersMemory: List<Long>? = null
     private var uniformBuffersMapped: Pair<MemoryStack, List<PointerBuffer>>? = null
+
+    private var textureImage: Long? = null
+    private var textureImageMemory: Long? = null
+    private var textureImageView: Long? = null
+    private var textureSampler: Long? = null
 
     fun run() {
         try {
@@ -125,6 +131,9 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         pickPhysicalDevice()
         createLogicalDevice()
         createCommandPools()
+        createTextureImage()
+        createTextureImageView()
+        createTextureSampler()
         createSwapChainObjects()
         createVertexBuffer()
         createIndexBuffer()
@@ -270,7 +279,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             if (
                 !queueFamilies.isComplete ||
                 !deviceExtensions.all { it in availableExtensionsNames } ||
-                querySwapChainSupport(stack, device).let { it.formats!!.capacity() == 0 || it.presentModes!!.capacity() == 0}
+                querySwapChainSupport(stack, device).let { it.formats!!.capacity() == 0 || it.presentModes!!.capacity() == 0} ||
+                !features.samplerAnisotropy()
             ) {
                 return 0
             }
@@ -321,6 +331,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             }
 
             val deviceFeatures = VkPhysicalDeviceFeatures.calloc(stack)
+            deviceFeatures.samplerAnisotropy(true)
 
             val createInfo = VkDeviceCreateInfo.calloc(stack)
             createInfo.sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO)
@@ -397,6 +408,199 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
                 transferCommandPool = graphicCommandPool
             }
         }
+    }
+
+    private fun createTextureImage() {
+        MemoryStack.stackPush().use { stack ->
+            val image = loadImage("test.jpg")
+            val imageSize = (image.width * image.height * 4).toLong()
+            val stagingBuffer = stack.mallocLong(1)
+            val stagingBufferMemory = stack.mallocLong(1)
+            createBuffer(stack, imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, stagingBuffer, stagingBufferMemory, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+            val data = stack.mallocPointer(1)
+            vkMapMemory(logicalDevice!!, stagingBufferMemory.get(0), 0, imageSize, 0, data)
+            val pixels = image.getRGB(0, 0, image.width, image.height, null, 0, image.width)
+            val pixelsBuffer = data.getByteBuffer(0, imageSize.toInt())
+            for (y in 0 until image.height) {
+                for (x in 0 until image.width) {
+                    val pixel = pixels[image.width * y + x]
+                    pixelsBuffer.put(((pixel shr 16) and 0xFF).toByte())
+                    pixelsBuffer.put(((pixel shr 8) and 0xFF).toByte())
+                    pixelsBuffer.put((pixel and 0xFF).toByte())
+                    pixelsBuffer.put(((pixel shr 24) and 0xFF).toByte())
+                }
+            }
+            pixelsBuffer.flip()
+            vkUnmapMemory(logicalDevice!!, stagingBufferMemory.get(0))
+
+            val pTextureImage = stack.mallocLong(1)
+            val pTextureImageMemory = stack.mallocLong(1)
+            createImage(stack, image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT or VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, pTextureImage, pTextureImageMemory)
+            textureImage = pTextureImage.get(0)
+            textureImageMemory = pTextureImageMemory.get(0)
+
+            transitionImageLayout(stack, textureImage!!, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+            copyBufferToImage(stack, stagingBuffer.get(0), textureImage!!, image.width, image.height)
+            transitionImageLayout(stack, textureImage!!, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+
+            vkDestroyBuffer(logicalDevice!!, stagingBuffer.get(0), null)
+            vkFreeMemory(logicalDevice!!, stagingBufferMemory.get(0), null)
+        }
+    }
+
+    private fun createImage(stack: MemoryStack, image: BufferedImage, format: Int, tiling: Int, usage: Int, properties: Int, pImage: LongBuffer, pImageMemory: LongBuffer) {
+        val imageInfo = VkImageCreateInfo.calloc(stack)
+        imageInfo.sType(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO)
+        imageInfo.imageType(VK_IMAGE_TYPE_2D)
+        imageInfo.extent {
+            it.width(image.width)
+            it.height(image.height)
+            it.depth(1)
+        }
+        imageInfo.mipLevels(1)
+        imageInfo.arrayLayers(1)
+        imageInfo.format(format)
+        imageInfo.tiling(tiling)
+        imageInfo.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
+        imageInfo.usage(usage)
+        imageInfo.samples(VK_SAMPLE_COUNT_1_BIT)
+        imageInfo.sharingMode(VK_SHARING_MODE_EXCLUSIVE)
+
+        if (vkCreateImage(logicalDevice!!, imageInfo, null, pImage) != VK_SUCCESS) {
+            throw RuntimeException("Failed to create image")
+        }
+
+        val memRequirements = VkMemoryRequirements.calloc(stack)
+        vkGetImageMemoryRequirements(logicalDevice!!, pImage.get(0), memRequirements)
+
+        val allocInfo = VkMemoryAllocateInfo.calloc(stack)
+        allocInfo.sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO)
+        allocInfo.allocationSize(memRequirements.size())
+        allocInfo.memoryTypeIndex(findMemoryType(stack, memRequirements.memoryTypeBits(), properties))
+
+        if (vkAllocateMemory(logicalDevice!!, allocInfo, null, pImageMemory) != VK_SUCCESS) {
+            throw RuntimeException("Failed to allocate image memory")
+        }
+
+        vkBindImageMemory(logicalDevice!!, pImage.get(0), pImageMemory.get(0), 0)
+    }
+
+    private fun transitionImageLayout(stack: MemoryStack, image: Long, oldLayout: Int, newLayout: Int) {
+        val commandBuffer = beginSingleTimeCommands(stack)
+
+        val barrier = VkImageMemoryBarrier.calloc(1, stack)
+        barrier.sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER)
+        barrier.oldLayout(oldLayout)
+        barrier.newLayout(newLayout)
+        barrier.srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        barrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        barrier.image(image)
+        barrier.subresourceRange {
+            it.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+            it.baseMipLevel(0)
+            it.levelCount(1)
+            it.baseArrayLayer(0)
+            it.layerCount(1)
+        }
+
+        val srcStage: Int
+        val dstStage: Int
+        if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+            barrier.srcAccessMask(0)
+            barrier.dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
+            srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+            dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT
+        } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            barrier.srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
+            barrier.dstAccessMask(VK_ACCESS_SHADER_READ_BIT)
+            srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT
+            dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+        } else {
+            throw IllegalArgumentException("Unsupported layout transition")
+        }
+
+        vkCmdPipelineBarrier(commandBuffer, srcStage, dstStage, 0, null, null, barrier)
+
+        endSingleTimeCommands(stack, commandBuffer)
+    }
+
+    private fun copyBufferToImage(stack: MemoryStack, buffer: Long, image: Long, width: Int, height: Int) {
+        val commandBuffer = beginSingleTimeCommands(stack)
+
+        val region = VkBufferImageCopy.calloc(1, stack)
+        region.bufferOffset(0)
+        region.bufferRowLength(0)
+        region.bufferImageHeight(0)
+        region.imageSubresource {
+            it.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+            it.mipLevel(0)
+            it.baseArrayLayer(0)
+            it.layerCount(1)
+        }
+        region.imageOffset { it.set(0, 0, 0) }
+        region.imageExtent { it.set(width, height, 1) }
+
+        vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region)
+
+        endSingleTimeCommands(stack, commandBuffer)
+    }
+
+    private fun createTextureImageView() {
+        MemoryStack.stackPush().use { stack ->
+            textureImageView = createImageView(stack, textureImage!!, VK_FORMAT_R8G8B8A8_SRGB)
+        }
+    }
+
+    private fun createTextureSampler() {
+        MemoryStack.stackPush().use { stack ->
+            val properties = VkPhysicalDeviceProperties.calloc(stack)
+            vkGetPhysicalDeviceProperties(physicalDevice!!, properties)
+
+            val samplerInfo = VkSamplerCreateInfo.calloc(stack)
+            samplerInfo.sType(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO)
+            samplerInfo.magFilter(VK_FILTER_LINEAR)
+            samplerInfo.minFilter(VK_FILTER_LINEAR)
+            samplerInfo.addressModeU(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+            samplerInfo.addressModeV(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+            samplerInfo.addressModeW(VK_SAMPLER_ADDRESS_MODE_REPEAT)
+            samplerInfo.anisotropyEnable(true)
+            samplerInfo.maxAnisotropy(properties.limits().maxSamplerAnisotropy())
+            samplerInfo.borderColor(VK_BORDER_COLOR_INT_OPAQUE_BLACK)
+            samplerInfo.unnormalizedCoordinates(false)
+            samplerInfo.compareEnable(false)
+            samplerInfo.compareOp(VK_COMPARE_OP_ALWAYS)
+            samplerInfo.mipmapMode(VK_SAMPLER_MIPMAP_MODE_LINEAR)
+            samplerInfo.mipLodBias(0.0f)
+            samplerInfo.minLod(0.0f)
+            samplerInfo.maxLod(0.0f)
+
+            val pTextureSampler = stack.mallocLong(1)
+            if (vkCreateSampler(logicalDevice!!, samplerInfo, null, pTextureSampler) != VK_SUCCESS) {
+                throw RuntimeException("Failed to create texture sampler")
+            }
+            textureSampler = pTextureSampler.get(0)
+        }
+    }
+
+    private fun createImageView(stack: MemoryStack, image: Long, format: Int) : Long {
+        val viewInfo = VkImageViewCreateInfo.calloc(stack)
+        viewInfo.sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
+        viewInfo.image(image)
+        viewInfo.viewType(VK_IMAGE_VIEW_TYPE_2D)
+        viewInfo.format(format)
+        viewInfo.subresourceRange {
+            it.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+            it.baseMipLevel(0)
+            it.levelCount(1)
+            it.baseArrayLayer(0)
+            it.layerCount(1)
+        }
+
+        val pImageView = stack.mallocLong(1)
+        if (vkCreateImageView(logicalDevice!!, viewInfo, null, pImageView) != VK_SUCCESS) {
+            throw RuntimeException("Failed to create image views")
+        }
+        return pImageView.get(0)
     }
 
     private fun createSwapChainObjects() {
@@ -489,29 +693,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
     private fun createImageViews() {
         MemoryStack.stackPush().use { stack ->
             swapChainImageViews = swapChainImages!!.map { image ->
-                val createInfo = VkImageViewCreateInfo.calloc(stack)
-                createInfo.sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO)
-                createInfo.image(image)
-                createInfo.viewType(VK_IMAGE_VIEW_TYPE_2D)
-                createInfo.format(swapChainImageFormat!!)
-                createInfo.components {
-                    it.r(VK_COMPONENT_SWIZZLE_IDENTITY)
-                    it.g(VK_COMPONENT_SWIZZLE_IDENTITY)
-                    it.b(VK_COMPONENT_SWIZZLE_IDENTITY)
-                    it.a(VK_COMPONENT_SWIZZLE_IDENTITY)
-                }
-                createInfo.subresourceRange {
-                    it.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
-                    it.baseMipLevel(0)
-                    it.levelCount(1)
-                    it.baseArrayLayer(0)
-                    it.layerCount(1)
-                }
-                val pImageView = stack.mallocLong(1)
-                if (vkCreateImageView(logicalDevice!!, createInfo, null, pImageView) != VK_SUCCESS) {
-                    throw RuntimeException("Failed to create image views")
-                }
-                pImageView.get(0)
+                createImageView(stack, image, swapChainImageFormat!!)
             }
         }
     }
@@ -561,15 +743,24 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
 
     private fun createDescriptorSetLayout() {
         MemoryStack.stackPush().use { stack ->
-            val uboLayoutBinding = VkDescriptorSetLayoutBinding.calloc(1, stack)
+            val uboLayoutBinding = VkDescriptorSetLayoutBinding.calloc(stack)
             uboLayoutBinding.binding(0)
             uboLayoutBinding.descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
             uboLayoutBinding.descriptorCount(1)
             uboLayoutBinding.stageFlags(VK_SHADER_STAGE_VERTEX_BIT)
 
+            val samplerLayoutBinding = VkDescriptorSetLayoutBinding.calloc(stack)
+            samplerLayoutBinding.binding(1)
+            samplerLayoutBinding.descriptorCount(1)
+            samplerLayoutBinding.descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+            samplerLayoutBinding.pImmutableSamplers(null)
+            samplerLayoutBinding.stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
+
+            val bindings = VkDescriptorSetLayoutBinding.calloc(2, stack)
+            bindings.put(uboLayoutBinding).put(samplerLayoutBinding).flip()
             val layoutInfo = VkDescriptorSetLayoutCreateInfo.calloc(stack)
             layoutInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)
-            layoutInfo.pBindings(uboLayoutBinding)
+            layoutInfo.pBindings(bindings)
 
             val pDescriptorSetLayout = stack.mallocLong(1)
             if (vkCreateDescriptorSetLayout(logicalDevice!!, layoutInfo, null, pDescriptorSetLayout) != VK_SUCCESS) {
@@ -780,9 +971,16 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
 
     private fun createDescriptorPool() {
         MemoryStack.stackPush().use { stack ->
-            val poolSizes = VkDescriptorPoolSize.calloc(1, stack)
-            poolSizes.type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
-            poolSizes.descriptorCount(MAX_FRAMES_IN_FLIGHT)
+            val uboPool = VkDescriptorPoolSize.calloc(stack)
+            uboPool.type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+            uboPool.descriptorCount(MAX_FRAMES_IN_FLIGHT)
+
+            val samplerPool = VkDescriptorPoolSize.calloc(stack)
+            samplerPool.type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+            samplerPool.descriptorCount(MAX_FRAMES_IN_FLIGHT)
+
+            val poolSizes = VkDescriptorPoolSize.calloc(2, stack)
+            poolSizes.put(uboPool).put(samplerPool).flip()
 
             val poolInfo = VkDescriptorPoolCreateInfo.calloc(stack)
             poolInfo.sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO)
@@ -817,16 +1015,33 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
                 bufferInfo.offset(0)
                 bufferInfo.range(UniformBufferObject.SIZEOF.toLong())
 
-                val descriptorWrite = VkWriteDescriptorSet.calloc(1, stack)
-                descriptorWrite.sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
-                descriptorWrite.dstSet(descriptorSets!![i])
-                descriptorWrite.dstBinding(0)
-                descriptorWrite.dstArrayElement(0)
-                descriptorWrite.descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
-                descriptorWrite.pBufferInfo(bufferInfo)
-                descriptorWrite.descriptorCount(1)
+                val imageInfo = VkDescriptorImageInfo.calloc(1, stack)
+                imageInfo.imageLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                imageInfo.imageView(textureImageView!!)
+                imageInfo.sampler(textureSampler!!)
 
-                vkUpdateDescriptorSets(logicalDevice!!, descriptorWrite, null)
+                val uboDescriptor = VkWriteDescriptorSet.calloc(stack)
+                uboDescriptor.sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+                uboDescriptor.dstSet(descriptorSets!![i])
+                uboDescriptor.dstBinding(0)
+                uboDescriptor.dstArrayElement(0)
+                uboDescriptor.descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                uboDescriptor.pBufferInfo(bufferInfo)
+                uboDescriptor.descriptorCount(1)
+
+                val samplerDescriptor = VkWriteDescriptorSet.calloc(stack)
+                samplerDescriptor.sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+                samplerDescriptor.dstSet(descriptorSets!![i])
+                samplerDescriptor.dstBinding(1)
+                samplerDescriptor.dstArrayElement(0)
+                samplerDescriptor.descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                samplerDescriptor.pImageInfo(imageInfo)
+                samplerDescriptor.descriptorCount(1)
+
+                val descriptorWrites = VkWriteDescriptorSet.calloc(2, stack)
+                descriptorWrites.put(uboDescriptor).put(samplerDescriptor).flip()
+
+                vkUpdateDescriptorSets(logicalDevice!!, descriptorWrites, null)
             }
         }
     }
@@ -870,6 +1085,14 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
     }
 
     private fun copyBuffer(stack: MemoryStack, srcBuffer: Long, dstBuffer: Long, size: Long) {
+        val commandBuffer = beginSingleTimeCommands(stack)
+        val copyRegion = VkBufferCopy.calloc(1, stack)
+        copyRegion.size(size)
+        vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, copyRegion)
+        endSingleTimeCommands(stack, commandBuffer)
+    }
+
+    private fun beginSingleTimeCommands(stack: MemoryStack) : VkCommandBuffer {
         val allocInfo = VkCommandBufferAllocateInfo.calloc(stack)
         allocInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO)
         allocInfo.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
@@ -887,9 +1110,11 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         beginInfo.flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT)
 
         vkBeginCommandBuffer(commandBuffer, beginInfo)
-        val copyRegion = VkBufferCopy.calloc(1, stack)
-        copyRegion.size(size)
-        vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, copyRegion)
+        return commandBuffer
+    }
+
+    private fun endSingleTimeCommands(stack: MemoryStack, commandBuffer: VkCommandBuffer) {
+
         vkEndCommandBuffer(commandBuffer)
 
         val submitInfo = VkSubmitInfo.calloc(stack)
@@ -992,6 +1217,8 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
                 putFloat(vertex.color.x)
                 putFloat(vertex.color.y)
                 putFloat(vertex.color.z)
+                putFloat(vertex.textureCoordinates.x)
+                putFloat(vertex.textureCoordinates.y)
             }
         }
         vkUnmapMemory(logicalDevice!!, pStagingMemory.get())
@@ -1174,6 +1401,12 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             cleanup()
 
             cleanupSwapChain()
+
+            vkDestroySampler(logicalDevice!!, textureSampler!!, null)
+            vkDestroyImageView(logicalDevice!!, textureImageView!!, null)
+
+            vkDestroyImage(logicalDevice!!, textureImage!!, null)
+            vkFreeMemory(logicalDevice!!, textureImageMemory!!, null)
 
             vkDestroyBuffer(logicalDevice!!, indexBuffer!!, null)
             vkFreeMemory(logicalDevice!!, indexBufferMemory!!, null)

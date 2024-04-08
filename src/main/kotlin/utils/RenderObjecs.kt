@@ -7,10 +7,10 @@ import org.lwjgl.vulkan.VK10.*
 import org.lwjgl.vulkan.VkVertexInputAttributeDescription
 import org.lwjgl.vulkan.VkVertexInputBindingDescription
 
-data class Vertex(val position: Vec2f, val color: Vec3f) {
+data class Vertex(val position: Vec2f, val color: Vec3f, val textureCoordinates: Vec2f) {
 
     companion object {
-        const val SIZEOF = (2 + 3) * Float.SIZE_BYTES
+        const val SIZEOF = (2 + 3 + 2) * Float.SIZE_BYTES
 
         fun getBindingDescription(stack: MemoryStack): VkVertexInputBindingDescription.Buffer {
             val bindingDescription = VkVertexInputBindingDescription.calloc(1, stack)
@@ -21,7 +21,7 @@ data class Vertex(val position: Vec2f, val color: Vec3f) {
         }
 
         fun getAttributeDescriptions(stack: MemoryStack): VkVertexInputAttributeDescription.Buffer {
-            val attributeDescriptions = VkVertexInputAttributeDescription.calloc(2, stack)
+            val attributeDescriptions = VkVertexInputAttributeDescription.calloc(3, stack)
 
             attributeDescriptions[0].binding(0)
             attributeDescriptions[0].location(0)
@@ -32,6 +32,11 @@ data class Vertex(val position: Vec2f, val color: Vec3f) {
             attributeDescriptions[1].location(1)
             attributeDescriptions[1].format(VK_FORMAT_R32G32B32_SFLOAT)
             attributeDescriptions[1].offset(2 * Float.SIZE_BYTES)
+
+            attributeDescriptions[2].binding(0)
+            attributeDescriptions[2].location(2)
+            attributeDescriptions[2].format(VK_FORMAT_R32G32_SFLOAT)
+            attributeDescriptions[2].offset(5 * Float.SIZE_BYTES)
 
             return attributeDescriptions
         }
