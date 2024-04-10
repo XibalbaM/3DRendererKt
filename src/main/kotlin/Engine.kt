@@ -16,11 +16,13 @@ import java.nio.IntBuffer
 import java.nio.LongBuffer
 
 
-abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = false, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = false, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 
     companion object {
         private const val MAX_FRAMES_IN_FLIGHT = 2
     }
+
+    val eventManager = EventManager()
 
     private var window: Long? = null
 
@@ -96,12 +98,11 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         try {
             initWindow()
             initVulkan()
-            init()
-            pLoop()
+            loop()
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
-            pCleanup()
+            cleanup()
         }
     }
 
@@ -132,6 +133,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
 
     @Suppress("UNUSED_PARAMETER")
     private fun framebufferResizeCallback(window: Long, width: Int, height: Int) {
+        eventManager.fire(WindowEvent.Resize(vec2(swapChainExtent!!.width(), swapChainExtent!!.height()), vec2(width, height)))
         framebufferResized = true
     }
 
@@ -230,7 +232,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         return createInfo
     }
 
-    open fun debugCallback(messageSeverity: Int, messageType: Int, pCallbackData: Long, pUserData: Long): Int {
+    private fun debugCallback(messageSeverity: Int, messageType: Int, pCallbackData: Long, pUserData: Long): Int {
         if (messageSeverity >= logLevel) {
             val callbackData = VkDebugUtilsMessengerCallbackDataEXT.create(pCallbackData)
             val color = when (messageSeverity) {
@@ -280,7 +282,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         }
     }
 
-    open fun rateDeviceSuitability(device: VkPhysicalDevice, properties: VkPhysicalDeviceProperties, features: VkPhysicalDeviceFeatures, queueFamilies: QueueFamilyIndices): Byte {
+    private fun rateDeviceSuitability(device: VkPhysicalDevice, properties: VkPhysicalDeviceProperties, features: VkPhysicalDeviceFeatures, queueFamilies: QueueFamilyIndices): Byte {
         MemoryStack.stackPush().use { stack ->
             val extensionCount = stack.ints(0)
             vkEnumerateDeviceExtensionProperties(device, null as String?, extensionCount, null)
@@ -1286,10 +1288,9 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         vkDestroySwapchainKHR(logicalDevice!!, swapChain!!, null)
     }
 
-    private fun pLoop() {
+    private fun loop() {
         while (!glfwWindowShouldClose(window!!)) {
             glfwPollEvents()
-            loop()
             drawFrame()
         }
         vkDeviceWaitIdle(logicalDevice!!)
@@ -1416,15 +1417,7 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         MemoryStack.stackPush().use { stack ->
             val currentTime = System.currentTimeMillis()
             val deltaTime = (currentTime - startTime) / 1000.0f
-
-            val model = rotate(deltaTime * pi / 2, vec3(0f, 0f, 1f))
-            val view = lookAt(vec3(2f, 2f, 2f), vec3(0f, 0f, 0f), vec3(0f, 0f, 1f))
-            val tempProj = perspective(pi / 4, swapChainExtent!!.width().toFloat() / swapChainExtent!!.height().toFloat(), 0.1f, 10f)
-            val rows: List<MutableList<Float>> = tempProj.rows.map { it.toMutableList() }
-            rows[1][1] = -rows[1][1]
-            val proj = SquareMatrix(rows)
-
-            val ubo = UniformBufferObject(model, view, proj)
+            val ubo = getUniformBufferObject(deltaTime)
             val size = UniformBufferObject.SIZEOF.toLong()
             val data = stack.mallocPointer(1)
             vkMapMemory(logicalDevice!!, uniformBuffersMemory!![currentFrame], 0, size, 0, data)
@@ -1435,6 +1428,17 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             }
             vkUnmapMemory(logicalDevice!!, uniformBuffersMemory!![currentFrame])
         }
+    }
+
+    private fun getUniformBufferObject(deltaTime: Float) : UniformBufferObject {
+        val model = rotate(deltaTime * pi / 2, vec3(0f, 0f, 1f))
+        val view = lookAt(vec3(2f, 2f, 2f), vec3(0f, 0f, 0f), vec3(0f, 0f, 1f))
+        val tempProj = perspective(pi / 4, swapChainExtent!!.width().toFloat() / swapChainExtent!!.height().toFloat(), 0.1f, 10f)
+        val rows: List<MutableList<Float>> = tempProj.rows.map { it.toMutableList() }
+        rows[1][1] = -rows[1][1]
+        val proj = SquareMatrix(rows)
+
+        return UniformBufferObject(model, view, proj)
     }
 
     private fun recordCommandBuffer(stack: MemoryStack, commandBuffer: VkCommandBuffer, imageIndex: Int) {
@@ -1496,10 +1500,9 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
         }
     }
 
-    private fun pCleanup() {
+    private fun cleanup() {
+        eventManager.fire(WindowEvent.Close())
         try {
-            cleanup()
-
             cleanupSwapChain()
 
             vkDestroySampler(logicalDevice!!, textureSampler!!, null)
@@ -1534,10 +1537,6 @@ abstract class Engine(private val defaultSize: Vec2<Int>, private val showFPS: B
             glfwTerminate()
         }
     }
-
-    abstract fun init()
-    abstract fun loop()
-    abstract fun cleanup()
 
     class QueueFamilyIndices(var graphicsFamily: Int? = null, var presentFamily: Int? = null, var transferFamily: Int? = null) {
         val isComplete get() = graphicsFamily != null && presentFamily != null
