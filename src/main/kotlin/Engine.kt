@@ -23,6 +23,7 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
     }
 
     val eventManager = EventManager()
+    val keyboardManager = KeyboardManager(eventManager)
 
     private var window: Long? = null
 
@@ -129,6 +130,7 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
         )
 
         glfwSetFramebufferSizeCallback(window!!, this::framebufferResizeCallback)
+        glfwSetKeyCallback(window!!, keyboardManager::keyCallback)
     }
 
     @Suppress("UNUSED_PARAMETER")
