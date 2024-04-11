@@ -10,7 +10,6 @@ fun getAllFunAnnotatedWith(annotation: KClass<out Annotation>): List<KFunction<*
     val classLoader = ClassLoader.getSystemClassLoader()
     val packages = classLoader.definedPackages
     val packageNames = packages.mapNotNull { it.name }.filterNot { it.isBlank() }.filterNot { it.startsWith("java") }.filterNot { it.startsWith("kotlin") }
-    println("Packages: $packageNames")
     val classes = packageNames
         .flatMap { classLoader.getResources(it.replace(".", "/")).toList().map { clazz -> it to clazz } }
         .toSet()
