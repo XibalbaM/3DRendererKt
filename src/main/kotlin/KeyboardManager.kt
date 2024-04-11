@@ -1,4 +1,6 @@
-import events.KeyboardEvent.*
+package fr.xibalba.renderer
+
+import fr.xibalba.renderer.events.KeyboardEvent.*
 import org.lwjgl.glfw.GLFW.*
 
 class KeyboardManager(private val eventManager: EventManager) {

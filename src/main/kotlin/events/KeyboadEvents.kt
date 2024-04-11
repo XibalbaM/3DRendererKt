@@ -1,7 +1,7 @@
-package events
+package fr.xibalba.renderer.events
 
-import CancellableEvent
-import KeyboardManager
+import fr.xibalba.renderer.CancellableEvent
+import fr.xibalba.renderer.KeyboardManager
 
 open class KeyboardEvent(val keyboardManager: KeyboardManager, val keyCode: Int) : CancellableEvent() {
 

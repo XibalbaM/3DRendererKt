@@ -1,4 +1,7 @@
+package fr.xibalba.renderer
+
 import fr.xibalba.math.*
+import fr.xibalba.renderer.utils.*
 import org.lwjgl.PointerBuffer
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.glfw.GLFWVulkan.glfwCreateWindowSurface
@@ -11,10 +14,8 @@ import org.lwjgl.vulkan.EXTDebugUtils.*
 import org.lwjgl.vulkan.KHRSurface.*
 import org.lwjgl.vulkan.KHRSwapchain.*
 import org.lwjgl.vulkan.VK10.*
-import utils.*
 import java.nio.IntBuffer
 import java.nio.LongBuffer
-
 
 class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = false, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 

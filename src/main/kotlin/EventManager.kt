@@ -1,3 +1,5 @@
+package fr.xibalba.renderer
+
 import fr.xibalba.math.Vec2
 import kotlin.reflect.KClass
 

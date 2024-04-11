@@ -1,3 +1,5 @@
+package fr.xibalba.renderer
+
 import fr.xibalba.math.*
 import org.lwjgl.vulkan.EXTDebugUtils.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT
 

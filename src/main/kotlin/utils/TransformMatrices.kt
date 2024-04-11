@@ -1,4 +1,4 @@
-package utils
+package fr.xibalba.renderer.utils
 
 import fr.xibalba.math.*
 import kotlin.math.cos
