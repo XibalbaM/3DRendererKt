@@ -1,11 +1,16 @@
 package fr.xibalba.renderer
 
 import fr.xibalba.math.Vec2
+import fr.xibalba.renderer.utils.getAllFunAnnotatedWith
 import kotlin.reflect.KClass
 import kotlin.reflect.full.isSubclassOf
 
 class EventManager {
     val eventListeners = mutableListOf<EventListeners<*>>()
+
+    init {
+        detectAnnotations()
+    }
 
     @Suppress("UNCHECKED_CAST")
     inline fun <reified T : Event> subscribe(noinline listener: (T) -> Unit): Long {
@@ -47,6 +52,21 @@ class EventManager {
             }
         return true
     }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun detectAnnotations() {
+        val funs = getAllFunAnnotatedWith(EventListener::class)
+        funs.forEach {
+            val parameters = it.parameters
+            if (parameters.size == 1) {
+                val parameter = parameters[0]
+                val type = parameter.type.classifier as KClass<*>
+                if (type.isSubclassOf(Event::class)) {
+                    subscribe(type as KClass<Event>, it::call)
+                }
+            }
+        }
+    }
 }
 
 data class EventListeners<T : Event>(val event: KClass<T>, val listeners: MutableList<Pair<Long, (T) -> Unit>>)
@@ -64,3 +84,7 @@ open class WindowEvent : Event() {
     class Resize(val oldSize: Vec2<Int>, val newSize: Vec2<Int>) : WindowEvent()
     class Close : WindowEvent()
 }
+
+@Target(AnnotationTarget.FUNCTION)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class EventListener

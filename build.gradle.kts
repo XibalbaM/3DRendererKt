@@ -20,6 +20,8 @@ dependencies {
     implementation("org.lwjgl", "lwjgl-vulkan")
     runtimeOnly("org.lwjgl", "lwjgl", classifier = "natives-windows")
     runtimeOnly("org.lwjgl", "lwjgl-glfw", classifier = "natives-windows")
+
+    implementation(kotlin("reflect"))
 }
 
 tasks.test {
