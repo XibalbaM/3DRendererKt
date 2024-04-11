@@ -1,6 +1,7 @@
 package fr.xibalba.renderer
 
 import fr.xibalba.math.*
+import fr.xibalba.renderer.events.EngineEvents
 import fr.xibalba.renderer.utils.*
 import org.lwjgl.PointerBuffer
 import org.lwjgl.glfw.GLFW.*
@@ -98,14 +99,20 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
 
     fun run() {
         try {
+            if (!eventManager.fire(EngineEvents.BeforeInit(this))) {
+                return
+            }
             initWindow()
             initVulkan()
+            if (!eventManager.fire(EngineEvents.AfterInit(this))) {
+                cleanup()
+                return
+            }
             loop()
         } catch (e: Exception) {
             e.printStackTrace()
-        } finally {
-            cleanup()
         }
+        cleanup()
     }
 
     private fun initWindow() {
@@ -252,9 +259,12 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
                 else -> "[UNKNOWN]"
             }
             val message = "$color$prefix ${callbackData.pMessageString()}\u001b[0m"
+            val event = EngineEvents.Log(this, messageSeverity, messageType, pCallbackData, pUserData, message)
+            if (!eventManager.fire(event))
+                return VK_FALSE
             when (messageSeverity) {
-                VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT -> System.err.println(message)
-                else -> println(message)
+                VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT -> System.err.println(event.message)
+                else -> println(event.message)
             }
         }
         return VK_FALSE
@@ -287,6 +297,7 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
 
     private fun rateDeviceSuitability(device: VkPhysicalDevice, properties: VkPhysicalDeviceProperties, features: VkPhysicalDeviceFeatures, queueFamilies: QueueFamilyIndices): Byte {
         MemoryStack.stackPush().use { stack ->
+            var suitability = 1
             val extensionCount = stack.ints(0)
             vkEnumerateDeviceExtensionProperties(device, null as String?, extensionCount, null)
             val availableExtensions = VkExtensionProperties.malloc(extensionCount[0], stack)
@@ -298,9 +309,14 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
                 querySwapChainSupport(stack, device).let { it.formats!!.capacity() == 0 || it.presentModes!!.capacity() == 0} ||
                 !features.samplerAnisotropy()
             ) {
-                return 0
+                suitability = 0
             }
-            return 1
+            val event = EngineEvents.RateDeviceSuitability(this, device, properties, features, queueFamilies, suitability.toByte())
+            if (!eventManager.fire(event)) {
+                return 0
+            } else {
+                return event.suitability
+            }
         }
     }
 
@@ -1291,10 +1307,16 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
         vkDestroySwapchainKHR(logicalDevice!!, swapChain!!, null)
     }
 
+    private val startTime = System.currentTimeMillis()
     private fun loop() {
         while (!glfwWindowShouldClose(window!!)) {
+            val currentTime = System.currentTimeMillis()
+            val deltaTime = (currentTime - startTime) / 1000.0f
             glfwPollEvents()
-            drawFrame()
+            if (!eventManager.fire(EngineEvents.Tick(this, deltaTime))) {
+                continue
+            }
+            drawFrame(deltaTime)
         }
         vkDeviceWaitIdle(logicalDevice!!)
     }
@@ -1360,7 +1382,7 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
         setTriangles(stack, newTriangles)
     }
 
-    private fun drawFrame() {
+    private fun drawFrame(deltaTime: Float) {
         MemoryStack.stackPush().use { stack ->
             val frame = frames[currentFrame]
             vkWaitForFences(logicalDevice!!, frame.inFlightFence, true, Long.MAX_VALUE)
@@ -1377,7 +1399,7 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
 
             recordCommandBuffer(stack, commandBuffers!![currentFrame], imageIndex)
 
-            updateUniformBuffer()
+            updateUniformBuffer(deltaTime)
 
             val submitInfo = VkSubmitInfo.calloc(stack)
             submitInfo.sType(VK_STRUCTURE_TYPE_SUBMIT_INFO)
@@ -1415,11 +1437,8 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
         }
     }
 
-    private val startTime = System.currentTimeMillis()
-    private fun updateUniformBuffer() {
+    private fun updateUniformBuffer(deltaTime: Float) {
         MemoryStack.stackPush().use { stack ->
-            val currentTime = System.currentTimeMillis()
-            val deltaTime = (currentTime - startTime) / 1000.0f
             val ubo = getUniformBufferObject(deltaTime)
             val size = UniformBufferObject.SIZEOF.toLong()
             val data = stack.mallocPointer(1)
@@ -1440,8 +1459,9 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
         val rows: List<MutableList<Float>> = tempProj.rows.map { it.toMutableList() }
         rows[1][1] = -rows[1][1]
         val proj = SquareMatrix(rows)
-
-        return UniformBufferObject(model, view, proj)
+        val ubo = UniformBufferObject(model, view, proj)
+        val event = EngineEvents.CreateUniformBufferObject(this, deltaTime, ubo)
+        return if (eventManager.fire(event)) event.uniformBufferObject else ubo
     }
 
     private fun recordCommandBuffer(stack: MemoryStack, commandBuffer: VkCommandBuffer, imageIndex: Int) {
@@ -1536,6 +1556,7 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
             vkDestroySurfaceKHR(vulkan!!, surface!!, null)
             vkDestroyInstance(vulkan!!, null)
             glfwDestroyWindow(window!!)
+            eventManager.fire(EngineEvents.Cleanup(this))
         } finally {
             glfwTerminate()
         }
