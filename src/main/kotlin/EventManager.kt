@@ -2,18 +2,24 @@ package fr.xibalba.renderer
 
 import fr.xibalba.math.Vec2
 import kotlin.reflect.KClass
+import kotlin.reflect.full.isSubclassOf
 
 class EventManager {
     val eventListeners = mutableListOf<EventListeners<*>>()
 
     @Suppress("UNCHECKED_CAST")
     inline fun <reified T : Event> subscribe(noinline listener: (T) -> Unit): Long {
-        val index = eventListeners.indexOfFirst { it.event == T::class }
+        return subscribe(T::class, listener as (Event) -> Unit)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    fun subscribe(event: KClass<out Event>, listener: (Event) -> Unit): Long {
+        val index = eventListeners.indexOfFirst { it.event == event }
         if (index == -1) {
-            eventListeners += EventListeners(T::class, mutableListOf(0L to listener))
+            eventListeners += EventListeners(event, mutableListOf(0L to listener))
             return 0
         } else {
-            val eventListeners = eventListeners[index] as EventListeners<T>
+            val eventListeners = eventListeners[index] as EventListeners<Event>
             val id = eventListeners.listeners.maxOf { it.first } + 1
             eventListeners.listeners.addLast(id to listener)
             return id
@@ -31,14 +37,14 @@ class EventManager {
 
     @Suppress("UNCHECKED_CAST")
     inline fun <reified T : Event> fire(event: T): Boolean {
-        val index = eventListeners.indexOfFirst { it.event == T::class }
-        if (index != -1) {
-            val eventListeners = eventListeners[index] as EventListeners<T>
-            eventListeners.listeners.forEach {
-                it.second(event)
-                if (event is CancellableEvent && event.cancelled) return false
+        eventListeners
+            .filter { T::class.isSubclassOf(it.event) }
+            .forEach { eventListener ->
+                (eventListener as EventListeners<T>).listeners.forEach {
+                    it.second(event)
+                    if (event is CancellableEvent && event.cancelled) return false
+                }
             }
-        }
         return true
     }
 }
