@@ -1,12 +1,16 @@
 package fr.xibalba.renderer
 
 import fr.xibalba.math.*
-import org.lwjgl.vulkan.EXTDebugUtils.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT
 
-class Viewport(size: Vec2<Int>, showFps: Boolean = false, debugSeverity: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
-    private val engine = Engine(size, showFps, debugSeverity)
+object Viewport {
+    private val camera = Camera(vec3(0f, 0f, 3f), vec3(0f, 0f, 0f))
 
-    fun run() {
-        engine.run()
+    fun run(size: Vec2<Int>) {
+        Engine.run(size)
+    }
+
+    fun setLogLevel(logLevel: Int): Viewport {
+        Engine.logLevel = logLevel
+        return this
     }
 }

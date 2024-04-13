@@ -5,7 +5,7 @@ import fr.xibalba.renderer.utils.getAllFunAnnotatedWith
 import kotlin.reflect.KClass
 import kotlin.reflect.full.isSubclassOf
 
-class EventManager {
+object EventManager {
     val eventListeners = mutableListOf<EventListeners<*>>()
 
     init {

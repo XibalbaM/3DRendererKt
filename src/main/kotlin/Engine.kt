@@ -1,6 +1,7 @@
 package fr.xibalba.renderer
 
 import fr.xibalba.math.*
+import fr.xibalba.renderer.KeyboardManager.keyCallback
 import fr.xibalba.renderer.events.EngineEvents
 import fr.xibalba.renderer.utils.*
 import org.lwjgl.PointerBuffer
@@ -18,14 +19,9 @@ import org.lwjgl.vulkan.VK10.*
 import java.nio.IntBuffer
 import java.nio.LongBuffer
 
-class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = false, private val logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+object Engine {
 
-    companion object {
-        private const val MAX_FRAMES_IN_FLIGHT = 2
-    }
-
-    val eventManager = EventManager()
-    val keyboardManager = KeyboardManager(eventManager)
+    private const val MAX_FRAMES_IN_FLIGHT = 2
 
     private var window: Long? = null
 
@@ -97,14 +93,18 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
     private var depthImageMemory: Long? = null
     private var depthImageView: Long? = null
 
-    fun run() {
+    var logLevel: Int = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
+    var running = false
+
+    fun run(defaultSize: Vec2<Int>) {
+        if (running) throw IllegalStateException("Engine is already running")
         try {
-            if (!eventManager.fire(EngineEvents.BeforeInit(this))) {
+            if (!EventManager.fire(EngineEvents.BeforeInit(this))) {
                 return
             }
-            initWindow()
+            initWindow(defaultSize)
             initVulkan()
-            if (!eventManager.fire(EngineEvents.AfterInit(this))) {
+            if (!EventManager.fire(EngineEvents.AfterInit(this))) {
                 cleanup()
                 return
             }
@@ -115,7 +115,7 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
         cleanup()
     }
 
-    private fun initWindow() {
+    private fun initWindow(defaultSize: Vec2<Int>) {
 
         if (!glfwInit()) {
             throw IllegalStateException("Unable to initialize GLFW")
@@ -138,12 +138,12 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
         )
 
         glfwSetFramebufferSizeCallback(window!!, this::framebufferResizeCallback)
-        glfwSetKeyCallback(window!!, keyboardManager::keyCallback)
+        glfwSetKeyCallback(window!!, KeyboardManager::keyCallback)
     }
 
     @Suppress("UNUSED_PARAMETER")
     private fun framebufferResizeCallback(window: Long, width: Int, height: Int) {
-        eventManager.fire(WindowEvent.Resize(vec2(swapChainExtent!!.width(), swapChainExtent!!.height()), vec2(width, height)))
+        EventManager.fire(WindowEvent.Resize(vec2(swapChainExtent!!.width(), swapChainExtent!!.height()), vec2(width, height)))
         framebufferResized = true
     }
 
@@ -260,7 +260,7 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
             }
             val message = "$color$prefix ${callbackData.pMessageString()}\u001b[0m"
             val event = EngineEvents.Log(this, messageSeverity, messageType, pCallbackData, pUserData, message)
-            if (!eventManager.fire(event))
+            if (!EventManager.fire(event))
                 return VK_FALSE
             when (messageSeverity) {
                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT -> System.err.println(event.message)
@@ -312,7 +312,7 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
                 suitability = 0
             }
             val event = EngineEvents.RateDeviceSuitability(this, device, properties, features, queueFamilies, suitability.toByte())
-            if (!eventManager.fire(event)) {
+            if (!EventManager.fire(event)) {
                 return 0
             } else {
                 return event.suitability
@@ -1313,7 +1313,7 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
             val currentTime = System.currentTimeMillis()
             val deltaTime = (currentTime - startTime) / 1000.0f
             glfwPollEvents()
-            if (!eventManager.fire(EngineEvents.Tick(this, deltaTime))) {
+            if (!EventManager.fire(EngineEvents.Tick(this, deltaTime))) {
                 continue
             }
             drawFrame(deltaTime)
@@ -1461,7 +1461,7 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
         val proj = SquareMatrix(rows)
         val ubo = UniformBufferObject(model, view, proj)
         val event = EngineEvents.CreateUniformBufferObject(this, deltaTime, ubo)
-        return if (eventManager.fire(event)) event.uniformBufferObject else ubo
+        return if (EventManager.fire(event)) event.uniformBufferObject else ubo
     }
 
     private fun recordCommandBuffer(stack: MemoryStack, commandBuffer: VkCommandBuffer, imageIndex: Int) {
@@ -1524,7 +1524,7 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
     }
 
     private fun cleanup() {
-        eventManager.fire(WindowEvent.Close())
+        EventManager.fire(WindowEvent.Close())
         try {
             cleanupSwapChain()
 
@@ -1556,7 +1556,7 @@ class Engine(private val defaultSize: Vec2<Int>, private val showFPS: Boolean = 
             vkDestroySurfaceKHR(vulkan!!, surface!!, null)
             vkDestroyInstance(vulkan!!, null)
             glfwDestroyWindow(window!!)
-            eventManager.fire(EngineEvents.Cleanup(this))
+            EventManager.fire(EngineEvents.Cleanup(this))
         } finally {
             glfwTerminate()
         }
