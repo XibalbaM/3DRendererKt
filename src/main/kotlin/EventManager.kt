@@ -56,18 +56,29 @@ object EventManager {
     @Suppress("UNCHECKED_CAST")
     private fun detectAnnotations() {
         val funs = getAllFunAnnotatedWith(EventListener::class)
-        funs.forEach {
-            val parameters = it.parameters
-            if (parameters.size == 1) {
-                val parameter = parameters[0]
-                val type = parameter.type.classifier as KClass<*>
-                if (type.isSubclassOf(Event::class)) {
-                    subscribe(type as KClass<Event>, it::call)
+        funs.forEach { (clazz, functions) ->
+            functions.forEach {
+                val parameters = it.parameters
+                if (parameters.size == 1) {
+                    val parameter = parameters[0]
+                    val type = parameter.type.classifier as KClass<*>
+                    if (type.isSubclassOf(Event::class)) {
+                        subscribe(type as KClass<Event>, it::call)
+                    } else {
+                        println("The parameter of the function ${it.name} must be a subclass of Event")
+                    }
+                } else if (parameters.size == 2) {
+                    val obj = clazz.objectInstance
+                    val parameter = parameters[1]
+                    val type = parameter.type.classifier as KClass<*>
+                    if (type.isSubclassOf(Event::class) && obj != null) {
+                        subscribe(type as KClass<Event>) { event -> it.call(obj, event) }
+                    } else {
+                        println("The parameter of the function ${it.name} must be a subclass of Event and the class must be an object")
+                    }
                 } else {
-                    println("The parameter of the function ${it.name} must be a subclass of Event")
+                    println("The function ${it.name} must have only one parameter")
                 }
-            } else {
-                println("The function ${it.name} must have only one parameter")
             }
         }
     }

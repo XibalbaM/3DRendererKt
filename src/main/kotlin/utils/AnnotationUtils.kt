@@ -6,7 +6,7 @@ import kotlin.reflect.KFunction
 import kotlin.reflect.jvm.kotlinFunction
 
 
-fun getAllFunAnnotatedWith(annotation: KClass<out Annotation>): List<KFunction<*>> {
+fun getAllFunAnnotatedWith(annotation: KClass<out Annotation>): Map<KClass<*>, List<KFunction<*>>> {
     val classLoader = ClassLoader.getSystemClassLoader()
     val packages = classLoader.definedPackages
     val packageNames = packages.mapNotNull { it.name }.filterNot { it.isBlank() }.filterNot { it.startsWith("java") }.filterNot { it.startsWith("kotlin") }
@@ -24,8 +24,8 @@ fun getAllFunAnnotatedWith(annotation: KClass<out Annotation>): List<KFunction<*
                 emptyList()
             }
         }.filterNotNull()
-    val methods = classes.flatMap { it.methods.toList() }.filter { it.isAnnotationPresent(annotation.java) }
-    return methods.mapNotNull { it.kotlinFunction }
+    val methods = classes.associateWith { it.methods.toList().filter { it.isAnnotationPresent(annotation.java) }.mapNotNull { it.kotlinFunction } }
+    return methods.mapKeys { it.key.kotlin }
 }
 
 fun getClass(className: String, packageName: String): Class<*>? {
