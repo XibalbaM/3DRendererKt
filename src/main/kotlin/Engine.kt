@@ -1,7 +1,6 @@
 package fr.xibalba.renderer
 
 import fr.xibalba.math.*
-import fr.xibalba.renderer.KeyboardManager.keyCallback
 import fr.xibalba.renderer.events.EngineEvents
 import fr.xibalba.renderer.utils.*
 import org.lwjgl.PointerBuffer
@@ -139,6 +138,9 @@ object Engine {
 
         glfwSetFramebufferSizeCallback(window!!, this::framebufferResizeCallback)
         glfwSetKeyCallback(window!!, KeyboardManager::keyCallback)
+        glfwSetCursorPosCallback(window!!, MouseManager::mouseMoveCallback)
+        glfwSetMouseButtonCallback(window!!, MouseManager::mouseButtonCallback)
+        glfwSetScrollCallback(window!!, MouseManager::mouseScrollCallback)
     }
 
     @Suppress("UNUSED_PARAMETER")
