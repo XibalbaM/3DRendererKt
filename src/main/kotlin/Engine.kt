@@ -76,8 +76,8 @@ object Engine {
         Vertex(Vec3(-0.5f, 0.5f, -0.5f), Vec3(1.0f, 1.0f, 1.0f), Vec2(1.0f, 1.0f))
     )
     private var triangles = listOf(
-        vec3(0, 1, 2), vec3(2, 3, 0),
-        vec3(4, 5, 6), vec3(6, 7, 4)
+        Vec3(0, 1, 2), Vec3(2, 3, 0),
+        Vec3(4, 5, 6), Vec3(6, 7, 4)
     )
 
     private var uniformBuffers: List<Long>? = null
@@ -145,7 +145,7 @@ object Engine {
 
     @Suppress("UNUSED_PARAMETER")
     private fun framebufferResizeCallback(window: Long, width: Int, height: Int) {
-        EventManager.fire(WindowEvent.Resize(vec2(swapChainExtent!!.width(), swapChainExtent!!.height()), vec2(width, height)))
+        EventManager.fire(WindowEvent.Resize(Vec2(swapChainExtent!!.width(), swapChainExtent!!.height()), Vec2(width, height)))
         framebufferResized = true
     }
 
@@ -1455,8 +1455,8 @@ object Engine {
     }
 
     private fun getUniformBufferObject(deltaTime: Float) : UniformBufferObject {
-        val model = rotate(deltaTime * pi / 2, vec3(0f, 0f, 1f))
-        val view = lookAt(vec3(2f, 2f, 2f), vec3(0f, 0f, 0f), vec3(0f, 0f, 1f))
+        val model = rotate(/*deltaTime **/ pi / 2, Vec3(0f, 0f, 1f))
+        val view = lookAt(Vec3(2f, 2f, 2f), Vec3(0f, 0f, 0f), Vec3(0f, 0f, 1f))
         val tempProj = perspective(pi / 4, swapChainExtent!!.width().toFloat() / swapChainExtent!!.height().toFloat(), 0.1f, 10f)
         val rows: List<MutableList<Float>> = tempProj.rows.map { it.toMutableList() }
         rows[1][1] = -rows[1][1]

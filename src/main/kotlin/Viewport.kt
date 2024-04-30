@@ -5,7 +5,7 @@ import fr.xibalba.renderer.events.EngineEvents
 import fr.xibalba.renderer.utils.lookAt
 
 object Viewport {
-    private val camera = Camera(vec3(0f, 0f, 3f), vec3(0f, 0f, 0f))
+    private val camera = Camera(Vec3(-2f, 0f, 2f), Vec2(0f, pi/4))
 
     fun run(size: Vec2<Int>) {
         Engine.run(size)

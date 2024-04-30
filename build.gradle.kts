@@ -13,7 +13,7 @@ repositories {
 dependencies {
     implementation(platform("org.lwjgl:lwjgl-bom:3.3.3"))
 
-    implementation("com.github.XibalbaM:MathKt:e8659c2ca3")
+    implementation("com.github.XibalbaM:MathKt:v1.1.0")
 
     implementation("org.lwjgl", "lwjgl")
     implementation("org.lwjgl", "lwjgl-glfw")

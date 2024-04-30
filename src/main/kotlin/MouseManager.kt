@@ -5,11 +5,16 @@ import fr.xibalba.renderer.events.MouseEvents
 
 object MouseManager {
 
-    var mousePosition = Vec2(0.0, 0.0)
+    private var mousePosition: Vec2<Double>? = null
 
     fun mouseMoveCallback(window: Long, xpos: Double, ypos: Double) {
-        mousePosition = Vec2(xpos, ypos)
-        EventManager.fire(MouseEvents.Moved(mousePosition, Vec2(xpos, ypos)))
+        if (mousePosition == null) {
+            mousePosition = Vec2(xpos, ypos)
+            return
+        } else {
+            EventManager.fire(MouseEvents.Moved(mousePosition!!, Vec2(xpos, ypos)))
+            mousePosition = Vec2(xpos, ypos)
+        }
     }
 
     fun mouseButtonCallback(window: Long, button: Int, action: Int, mods: Int) {
