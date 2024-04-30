@@ -19,7 +19,33 @@ fun scale(x: Float = 1f, y: Float = 1f, z: Float = 1f) = SquareMatrix(listOf(
     listOf(0f, 0f, 0f, 1f)
 ))
 
-fun rotate(angle: Float, vec: Vec3f, point: Vec3f = vec3(0f, 0f, 0f)) : SquareMatrix<Float> {
+fun rotateX(angle: Float) = SquareMatrix(listOf(
+    listOf(1f, 0f, 0f, 0f),
+    listOf(0f, cos(angle), -sin(angle), 0f),
+    listOf(0f, sin(angle), cos(angle), 0f),
+    listOf(0f, 0f, 0f, 1f)
+))
+
+fun rotateY(angle: Float) = SquareMatrix(listOf(
+    listOf(cos(angle), 0f, sin(angle), 0f),
+    listOf(0f, 1f, 0f, 0f),
+    listOf(-sin(angle), 0f, cos(angle), 0f),
+    listOf(0f, 0f, 0f, 1f)
+))
+
+fun rotateZ(angle: Float) = SquareMatrix(listOf(
+    listOf(cos(angle), -sin(angle), 0f, 0f),
+    listOf(sin(angle), cos(angle), 0f, 0f),
+    listOf(0f, 0f, 1f, 0f),
+    listOf(0f, 0f, 0f, 1f)
+))
+
+fun rotate(angles: Vec3f) : Matrix<Float> {
+    val (x, y, z) = angles
+    return rotateX(x) * rotateY(y) * rotateZ(z)
+}
+
+fun rotate(angle: Float, vec: Vec3f, point: Vec3f = Vec3(0f, 0f, 0f)) : SquareMatrix<Float> {
     val (u, v, w) = vec
     val (a, b, c) = point
     val uSquare = u * u

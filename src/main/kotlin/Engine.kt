@@ -22,7 +22,7 @@ object Engine {
 
     private const val MAX_FRAMES_IN_FLIGHT = 2
 
-    private var window: Long? = null
+    var window: Long? = null
 
     private var vulkan: VkInstance? = null
     private val validationLayers = if (DEBUG.get(true)) listOf("VK_LAYER_KHRONOS_validation") else emptyList()
@@ -103,6 +103,7 @@ object Engine {
             }
             initWindow(defaultSize)
             initVulkan()
+            running = true
             if (!EventManager.fire(EngineEvents.AfterInit(this))) {
                 cleanup()
                 return
@@ -1561,6 +1562,17 @@ object Engine {
             EventManager.fire(EngineEvents.Cleanup(this))
         } finally {
             glfwTerminate()
+            running = false
+        }
+    }
+
+    fun setCursor(cursor: Int) {
+        require(running)
+        glfwSetInputMode(window!!, GLFW_CURSOR, cursor)
+        if (cursor == GLFW_CURSOR_DISABLED && glfwRawMouseMotionSupported()) {
+            glfwSetInputMode(window!!, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE)
+        } else {
+            glfwSetInputMode(window!!, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE)
         }
     }
 

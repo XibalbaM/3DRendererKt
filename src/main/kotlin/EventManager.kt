@@ -72,7 +72,9 @@ object EventManager {
                     val parameter = parameters[1]
                     val type = parameter.type.classifier as KClass<*>
                     if (type.isSubclassOf(Event::class) && obj != null) {
-                        subscribe(type as KClass<Event>) { event -> it.call(obj, event) }
+                        subscribe(type as KClass<Event>) { event ->
+                            it.call(obj, event)
+                        }
                     } else {
                         println("The parameter of the function ${it.name} must be a subclass of Event and the class must be an object")
                     }
