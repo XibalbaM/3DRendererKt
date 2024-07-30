@@ -1,3 +1,7 @@
+@file:Suppress("ImplicitThis")
+
+import org.jetbrains.kotlin.gradle.dsl.KotlinJsCompile
+
 plugins {
     kotlin("jvm") version "1.9.23"
 }
@@ -29,6 +33,12 @@ tasks.test {
 }
 kotlin {
     jvmToolchain(21)
+}
+
+tasks.withType<KotlinJsCompile>().configureEach {
+    kotlinOptions.freeCompilerArgs += listOf(
+        "-Aorg.eclipse.jdt.core.compiler.annotation.suppressFBWarnings=\"private\""
+    )
 }
 
 tasks.register("compileVertShader") {

@@ -14,7 +14,7 @@ object Viewport {
     private val camera = Camera(Vec3(-2f, 0f, 2f), Vec2(0f, pi/4))
 
     fun run(size: Vec2<Int>) {
-        Engine.run(size)
+        Engine.run(size, listOf("viking_room"))
     }
 
     fun setLogLevel(logLevel: Int): Viewport {
@@ -24,31 +24,31 @@ object Viewport {
 
     @EventListener
     fun addCameraToUBO(event: EngineEvents.CreateUniformBufferObject) {
-        event.uniformBufferObject.view = camera.getViewMatrix()
+        event.uniformBufferObject.view = this.camera.getViewMatrix()
     }
 
     @EventListener
     fun moveCamera(event: EngineEvents.Tick) {
         val speed = 0.001f
         if (KeyboardManager.isKeyDown(GLFW.GLFW_KEY_W)) {
-            camera.move(camera.viewVector() * speed)
+            this.camera.move(this.camera.viewVector() * speed)
         }
         if (KeyboardManager.isKeyDown(GLFW.GLFW_KEY_S)) {
-            camera.move(camera.viewVector() * -speed)
+            this.camera.move(this.camera.viewVector() * -speed)
         }
         if (KeyboardManager.isKeyDown(GLFW.GLFW_KEY_A)) {
-            val right = camera.viewVector().cross(Vec3(0f, 0f, 1f))
-            camera.move(right * -speed)
+            val right = this.camera.viewVector().cross(Vec3(0f, 0f, 1f))
+            this.camera.move(right * -speed)
         }
         if (KeyboardManager.isKeyDown(GLFW.GLFW_KEY_D)) {
-            val right = camera.viewVector().cross(Vec3(0f, 0f, 1f))
-            camera.move(right * speed)
+            val right = this.camera.viewVector().cross(Vec3(0f, 0f, 1f))
+            this.camera.move(right * speed)
         }
         if (KeyboardManager.isKeyDown(GLFW.GLFW_KEY_SPACE)) {
-            camera.move(Vec3(0f, 0f, speed))
+            this.camera.move(Vec3(0f, 0f, speed))
         }
         if (KeyboardManager.isKeyDown(GLFW.GLFW_KEY_LEFT_SHIFT)) {
-            camera.move(Vec3(0f, 0f, -speed))
+            this.camera.move(Vec3(0f, 0f, -speed))
         }
     }
 
@@ -66,7 +66,7 @@ object Viewport {
         val (newX, newY) = event.newPosition
         val dx = (newX - oldX).toFloat()
         val dy = (newY - oldY).toFloat()
-        camera.rotate(Vec2(-dx * speed, dy * speed))
+        this.camera.rotate(Vec2(-dx * speed, dy * speed))
     }
 
     @EventListener
@@ -77,28 +77,28 @@ object Viewport {
 
 class Camera(var position: Vec3f, var rotation: Vec2f) {
     fun move(direction: Vec3f) {
-        position += direction
+        this.position += direction
     }
 
     fun rotate(direction: Vec2f) {
-        if (rotation.y + direction.y > pi / 2) {
-            rotation = Vec2((rotation.x + direction.x) % (2 * pi), pi / 2)
-        } else if (rotation.y + direction.y < -pi / 2) {
-            rotation = Vec2((rotation.x + direction.x) % (2 * pi), -pi / 2)
+        if (this.rotation.y + direction.y > pi / 2) {
+            this.rotation = Vec2((this.rotation.x + direction.x) % (2 * pi), pi / 2)
+        } else if (this.rotation.y + direction.y < -pi / 2) {
+            this.rotation = Vec2((this.rotation.x + direction.x) % (2 * pi), -pi / 2)
         } else {
-            rotation += Vec2(direction.x, direction.y)
-            rotation = Vec2(rotation.x % (2 * pi), rotation.y)
+            this.rotation += Vec2(direction.x, direction.y)
+            this.rotation = Vec2(this.rotation.x % (2 * pi), this.rotation.y)
         }
     }
 
     fun getViewMatrix(): SquareMatrix<Float> {
-        val eye = position
-        val center =  Vec4(viewVector(), 1f) + Vec4(eye.x, eye.y, eye.z, 0f)
+        val eye = this.position
+        val center =  Vec4(this.viewVector(), 1f) + Vec4(eye.x, eye.y, eye.z, 0f)
         val up = Vec3(0f, 0f, 1f)
         return lookAt(eye, Vec3(center[0, 0], center[1,0], center[2, 0]), up)
     }
 
     fun viewVector(): Vec3f {
-        return (rotateZ(rotation.x) * rotateY(rotation.y) * Vec4(1f, 0f, 0f, 1f)).let { Vec3(it[0, 0], it[1, 0], it[2, 0]) }
+        return (rotateZ(this.rotation.x) * rotateY(this.rotation.y) * Vec4(1f, 0f, 0f, 1f)).let { Vec3(it[0, 0], it[1, 0], it[2, 0]) }
     }
 }
