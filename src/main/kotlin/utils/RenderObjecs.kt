@@ -42,3 +42,5 @@ data class Vertex(val position: Vec3f, val color: Vec3f, val textureCoordinates:
         }
     }
 }
+
+data class RenderObject(val vertices: List<Vertex>, val indices: List<Int>)

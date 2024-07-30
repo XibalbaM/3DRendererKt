@@ -2,6 +2,7 @@ package fr.xibalba.renderer
 
 import fr.xibalba.math.*
 import fr.xibalba.renderer.events.EngineEvents
+import fr.xibalba.renderer.parsers.parseModel
 import fr.xibalba.renderer.utils.*
 import org.lwjgl.PointerBuffer
 import org.lwjgl.glfw.GLFW.*
@@ -64,21 +65,8 @@ object Engine {
     private var vertexBufferMemory: Long? = null
     private var indexBuffer: Long? = null
     private var indexBufferMemory: Long? = null
-    private var vertices = listOf(
-        Vertex(Vec3(-0.5f, -0.5f, 0.0f), Vec3(1.0f, 0.0f, 0.0f), Vec2(1.0f, 0.0f)),
-        Vertex(Vec3(0.5f, -0.5f, 0.0f), Vec3(0.0f, 1.0f, 0.0f), Vec2(0.0f, 0.0f)),
-        Vertex(Vec3(0.5f, 0.5f, 0.0f), Vec3(0.0f, 0.0f, 1.0f), Vec2(0.0f, 1.0f)),
-        Vertex(Vec3(-0.5f, 0.5f, 0.0f), Vec3(1.0f, 1.0f, 1.0f), Vec2(1.0f, 1.0f)),
-
-        Vertex(Vec3(-0.5f, -0.5f, -0.5f), Vec3(1.0f, 0.0f, 0.0f), Vec2(1.0f, 0.0f)),
-        Vertex(Vec3(0.5f, -0.5f, -0.5f), Vec3(0.0f, 1.0f, 0.0f), Vec2(0.0f, 0.0f)),
-        Vertex(Vec3(0.5f, 0.5f, -0.5f), Vec3(0.0f, 0.0f, 1.0f), Vec2(0.0f, 1.0f)),
-        Vertex(Vec3(-0.5f, 0.5f, -0.5f), Vec3(1.0f, 1.0f, 1.0f), Vec2(1.0f, 1.0f))
-    )
-    private var triangles = listOf(
-        Vec3(0, 1, 2), Vec3(2, 3, 0),
-        Vec3(4, 5, 6), Vec3(6, 7, 4)
-    )
+    private var vertices: List<Vertex> = emptyList()
+    private var indices: List<Int> = emptyList()
 
     private var uniformBuffers: List<Long>? = null
     private var uniformBuffersMemory: List<Long>? = null
@@ -161,6 +149,7 @@ object Engine {
         createTextureImageView()
         createTextureSampler()
         createSwapChainObjects()
+        loadModel()
         createVertexBuffer()
         createIndexBuffer()
         createSyncObjects()
@@ -482,7 +471,7 @@ object Engine {
 
     private fun createTextureImage() {
         MemoryStack.stackPush().use { stack ->
-            val image = loadImage("test.jpg")
+            val image = loadTexture("viking_room.png")
             val imageSize = (image.width * image.height * 4).toLong()
             val stagingBuffer = stack.mallocLong(1)
             val stagingBufferMemory = stack.mallocLong(1)
@@ -1033,6 +1022,12 @@ object Engine {
         }
     }
 
+    private fun loadModel() {
+        val model = parseModel("viking_room")
+        vertices = model.vertices
+        indices = model.indices
+    }
+
     private fun createVertexBuffer() {
         MemoryStack.stackPush().use { stack ->
             val size = (vertices.size * Vertex.SIZEOF).toLong()
@@ -1048,7 +1043,7 @@ object Engine {
 
     private fun createIndexBuffer() {
         MemoryStack.stackPush().use { stack ->
-            val size = (triangles.size * 3 * Integer.BYTES).toLong()
+            val size = (indices.size * 3 * Integer.BYTES).toLong()
 
             val pIndexBuffer = stack.mallocLong(1)
             val pIndexMemory = stack.mallocLong(1)
@@ -1056,7 +1051,7 @@ object Engine {
             indexBuffer = pIndexBuffer.get(0)
             indexBufferMemory = pIndexMemory.get(0)
 
-            setTriangles(stack, triangles)
+            setIndices(stack, indices)
         }
     }
 
@@ -1358,9 +1353,9 @@ object Engine {
         setVertices(stack, newVertices)
     }
 
-    private fun setTriangles(stack: MemoryStack, triangles: List<Vec3<Int>>) {
-        this.triangles = triangles
-        val size = (triangles.size * 3 * Integer.BYTES).toLong()
+    private fun setIndices(stack: MemoryStack, indices: List<Int>) {
+        this.indices = indices
+        val size = (indices.size * 3 * Integer.BYTES).toLong()
         val pStagingBuffer = stack.mallocLong(1)
         val pStagingMemory = stack.mallocLong(1)
         createBuffer(stack, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, pStagingBuffer, pStagingMemory, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
@@ -1368,7 +1363,7 @@ object Engine {
         val data = stack.mallocPointer(1)
         vkMapMemory(logicalDevice!!, pStagingMemory.get(0), 0, size, 0, data)
         data.getByteBuffer(0, size.toInt()).apply {
-            for (index in triangles.flatten()) {
+            for (index in indices) {
                 putInt(index)
             }
         }
@@ -1380,9 +1375,8 @@ object Engine {
         vkFreeMemory(logicalDevice!!, pStagingMemory.get(0), null)
     }
     @Suppress("unused")
-    private fun updateTriangles(stack: MemoryStack, transform: (Vec3<Int>) -> Vec3<Int>) {
-        val newTriangles = triangles.map(transform)
-        setTriangles(stack, newTriangles)
+    private fun updateIndices(stack: MemoryStack, transform: (Int) -> Int) {
+        setIndices(stack, indices.map(transform))
     }
 
     private fun drawFrame(deltaTime: Float) {
@@ -1456,9 +1450,9 @@ object Engine {
     }
 
     private fun getUniformBufferObject(deltaTime: Float) : UniformBufferObject {
-        val model = rotate(/*deltaTime **/ pi / 2, Vec3(0f, 0f, 1f))
+        val model = unitMatrix(4)
         val view = lookAt(Vec3(2f, 2f, 2f), Vec3(0f, 0f, 0f), Vec3(0f, 0f, 1f))
-        val tempProj = perspective(pi / 4, swapChainExtent!!.width().toFloat() / swapChainExtent!!.height().toFloat(), 0.1f, 10f)
+        val tempProj = perspective(pi / 4, swapChainExtent!!.width().toFloat() / swapChainExtent!!.height().toFloat(), 0.1f, 100f)
         val rows: List<MutableList<Float>> = tempProj.rows.map { it.toMutableList() }
         rows[1][1] = -rows[1][1]
         val proj = SquareMatrix(rows)
@@ -1517,7 +1511,7 @@ object Engine {
 
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout!!, 0, stack.longs(descriptorSets!![currentFrame]), null)
 
-        vkCmdDrawIndexed(commandBuffer, triangles.size * 3, 1, 0, 0, 0)
+        vkCmdDrawIndexed(commandBuffer, indices.size * 3, 1, 0, 0, 0)
 
         vkCmdEndRenderPass(commandBuffer)
 
