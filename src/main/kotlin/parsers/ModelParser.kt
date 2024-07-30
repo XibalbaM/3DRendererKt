@@ -1,5 +1,6 @@
 package fr.xibalba.renderer.parsers
 
+import fr.xibalba.math.Vec2
 import fr.xibalba.math.Vec3
 import fr.xibalba.math.Vec3f
 import fr.xibalba.math.Vec4
@@ -18,7 +19,8 @@ fun parseModel(path: String): RenderObject {
     val faces = lines.filter { it.startsWith("f ") }.map { it.split(" ").drop(1).map { it.split("/") } }.map { it.map { it.map { if(it.isEmpty()) null else it.toInt() } } }
         .map { it.map { FaceElement(it[0]!!, it.getOrElse(1) { null }, it.getOrElse(2) { null }) } }
     val vertices = faces.flatMap { it.toList().map { faceElement ->
-            Vertex(verticesCoordinates[faceElement.vertex - 1].xyz, Vec3f(1f, 1f, 1f), texturesCoordinates[faceElement.texture?.minus(1) ?: 0].xy)
+            val textureCoordinates = texturesCoordinates[faceElement.texture?.minus(1) ?: 0]
+            Vertex(verticesCoordinates[faceElement.vertex - 1].xyz, Vec3f(1f, 1f, 1f), Vec2(textureCoordinates.x, 1f - textureCoordinates.y))
         }
     }.toList()
     val (optimizedVertices, optimizedIndices) = optimize(vertices, vertices.indices.toList())
