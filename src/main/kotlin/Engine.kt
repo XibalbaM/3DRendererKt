@@ -1,7 +1,7 @@
 package fr.xibalba.renderer
 
 import fr.xibalba.math.*
-import fr.xibalba.renderer.engine.loadModel
+import fr.xibalba.renderer.engine.loadModels
 import fr.xibalba.renderer.engine.makeAtlas
 import fr.xibalba.renderer.events.EngineEvents
 import fr.xibalba.renderer.utils.*
@@ -153,7 +153,7 @@ object Engine {
         this.createTextureImageView()
         this.createTextureSampler()
         this.createSwapChainObjects()
-        this.loadModel()
+        this.loadModels()
         this.createVertexBuffer()
         this.createIndexBuffer()
         this.createSyncObjects()
@@ -514,7 +514,7 @@ object Engine {
             val pixelsBuffer = data.getByteBuffer(0, imageSize.toInt())
             for (y in 0 until atlas.height) {
                 for (x in 0 until atlas.width) {
-                    val pixel = atlas.pixels[atlas.width * y + x]
+                    val pixel = atlas.pixels[y + x * atlas.height]
                     pixelsBuffer.put(((pixel shr 16) and 0xFF).toByte())
                     pixelsBuffer.put(((pixel shr 8) and 0xFF).toByte())
                     pixelsBuffer.put((pixel and 0xFF).toByte())

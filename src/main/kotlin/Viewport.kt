@@ -14,7 +14,7 @@ object Viewport {
     private val camera = Camera(Vec3(-2f, 0f, 2f), Vec2(0f, pi/4))
 
     fun run(size: Vec2<Int>) {
-        Engine.run(size, listOf("viking_room"))
+        Engine.run(size, listOf("viking_room", "cube"))
     }
 
     fun setLogLevel(logLevel: Int): Viewport {
